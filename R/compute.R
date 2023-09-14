@@ -76,6 +76,8 @@ gcis_decay <- function(expr = NULL, breaks = NULL, src = NULL, domain = NULL, in
     }
     .gcheckroot()
 
+    intervals <- rescue_ALLGENOME(intervals, as.character(substitute(intervals)))
+
     if (is.null(intervals)) {
         intervals <- get("ALLGENOME", envir = .misha)
     }
@@ -145,6 +147,8 @@ gdist <- function(..., intervals = NULL, include.lowest = FALSE, iterator = NULL
         stop("Usage: gdist([expr, breaks]+, intervals = .misha$ALLGENOME, include.lowest = FALSE, iterator = NULL, band = NULL)", call. = FALSE)
     }
     .gcheckroot()
+
+    intervals <- rescue_ALLGENOME(intervals, as.character(substitute(intervals)))
 
     if (length(args) %% 2 != 0) {
         intervals <- eval.parent(args[[length(args)]])
@@ -252,6 +256,8 @@ gextract <- function(..., intervals = NULL, colnames = NULL, iterator = NULL, ba
     }
     .gcheckroot()
 
+    intervals <- rescue_ALLGENOME(intervals, as.character(substitute(intervals)))
+
     if (is.null(intervals)) {
         intervals <- eval.parent(args[[length(args)]])
         args <- args[1:(length(args) - 1)]
@@ -281,7 +287,7 @@ gextract <- function(..., intervals = NULL, colnames = NULL, iterator = NULL, ba
                     res <- .gcall("C_gextract", intervals, tracks, colnames, .iterator, band, file, intervals.set.out, .misha_env())
                 }
 
-                if (!is.null(intervals.set.out) && .gintervals.is_bigset(intervals.set.out, F) && !.gintervals.needs_bigset(intervals.set.out)) {
+                if (!is.null(intervals.set.out) && .gintervals.is_bigset(intervals.set.out, FALSE) && !.gintervals.needs_bigset(intervals.set.out)) {
                     .gintervals.big2small(intervals.set.out)
                 }
             }
@@ -360,6 +366,8 @@ gpartition <- function(expr = NULL, breaks = NULL, intervals = NULL, include.low
     }
     .gcheckroot()
 
+    intervals <- rescue_ALLGENOME(intervals, as.character(substitute(intervals)))
+
     exprstr <- do.call(.gexpr2str, list(substitute(expr)), envir = parent.frame())
     .iterator <- do.call(.giterator, list(substitute(iterator)), envir = parent.frame())
     intervals.set.out <- do.call(.gexpr2str, list(substitute(intervals.set.out)), envir = parent.frame())
@@ -374,7 +382,7 @@ gpartition <- function(expr = NULL, breaks = NULL, intervals = NULL, include.low
         {
             if (!is.null(intervals)) {
                 res <- .gcall("C_gpartition", intervals, exprstr, breaks, include.lowest, .iterator, band, intervals.set.out, .misha_env())
-                if (!is.null(intervals.set.out) && .gintervals.is_bigset(intervals.set.out, F) && !.gintervals.needs_bigset(intervals.set.out)) {
+                if (!is.null(intervals.set.out) && .gintervals.is_bigset(intervals.set.out, FALSE) && !.gintervals.needs_bigset(intervals.set.out)) {
                     .gintervals.big2small(intervals.set.out)
                 }
             }
@@ -440,6 +448,8 @@ gquantiles <- function(expr = NULL, percentiles = 0.5, intervals = get("ALLGENOM
         stop("Usage: gquantiles(expr, percentiles = 0.5, intervals = .misha$ALLGENOME, iterator = NULL, band = NULL)", call. = FALSE)
     }
     .gcheckroot()
+
+    intervals <- rescue_ALLGENOME(intervals, as.character(substitute(intervals)))
 
     exprstr <- do.call(.gexpr2str, list(substitute(expr)), envir = parent.frame())
     .iterator <- do.call(.giterator, list(substitute(iterator)), envir = parent.frame())
@@ -541,6 +551,8 @@ glookup <- function(lookup_table = NULL, ..., intervals = NULL, include.lowest =
         intervals <- eval.parent(args[[length(args)]])
     }
 
+    intervals <- rescue_ALLGENOME(intervals, as.character(substitute(intervals)))
+
     exprs <- c()
     breaks <- list()
 
@@ -562,7 +574,7 @@ glookup <- function(lookup_table = NULL, ..., intervals = NULL, include.lowest =
         {
             if (!is.null(intervals)) {
                 res <- .gcall("gbintransform", intervals, exprs, breaks, include.lowest, force.binning, lookup_table, .iterator, band, intervals.set.out, .misha_env())
-                if (!is.null(intervals.set.out) && .gintervals.is_bigset(intervals.set.out, F) && !.gintervals.needs_bigset(intervals.set.out)) {
+                if (!is.null(intervals.set.out) && .gintervals.is_bigset(intervals.set.out, FALSE) && !.gintervals.needs_bigset(intervals.set.out)) {
                     .gintervals.big2small(intervals.set.out)
                 }
             }
@@ -622,6 +634,8 @@ gsample <- function(expr = NULL, n = NULL, intervals = NULL, iterator = NULL, ba
     }
     .gcheckroot()
 
+    intervals <- rescue_ALLGENOME(intervals, as.character(substitute(intervals)))
+
     if (is.null(intervals)) {
         intervals <- get("ALLGENOME", envir = .misha)
     }
@@ -673,6 +687,8 @@ gscreen <- function(expr = NULL, intervals = NULL, iterator = NULL, band = NULL,
     }
     .gcheckroot()
 
+    intervals <- rescue_ALLGENOME(intervals, as.character(substitute(intervals)))
+
     if (is.null(intervals)) {
         intervals <- get("ALLGENOME", envir = .misha)
     }
@@ -695,7 +711,7 @@ gscreen <- function(expr = NULL, intervals = NULL, iterator = NULL, band = NULL,
                 res <- .gcall("C_gscreen", exprstr, intervals, .iterator, band, intervals.set.out, .misha_env())
             }
 
-            if (!is.null(intervals.set.out) && .gintervals.is_bigset(intervals.set.out, F) && !.gintervals.needs_bigset(intervals.set.out)) {
+            if (!is.null(intervals.set.out) && .gintervals.is_bigset(intervals.set.out, FALSE) && !.gintervals.needs_bigset(intervals.set.out)) {
                 .gintervals.big2small(intervals.set.out)
             }
 
@@ -762,6 +778,8 @@ gsegment <- function(expr = NULL, minsegment = NULL, maxpval = 0.05, onetailed =
     }
     .gcheckroot()
 
+    intervals <- rescue_ALLGENOME(intervals, as.character(substitute(intervals)))
+
     if (is.null(intervals)) {
         intervals <- get("ALLGENOME", envir = .misha)
     }
@@ -784,7 +802,7 @@ gsegment <- function(expr = NULL, minsegment = NULL, maxpval = 0.05, onetailed =
         {
             if (!is.null(intervals)) {
                 res <- .gcall("C_gsegment", exprstr, intervals, minsegment, stats::qnorm(maxpval), onetailed, .iterator, intervals.set.out, .misha_env())
-                if (!is.null(intervals.set.out) && .gintervals.is_bigset(intervals.set.out, F) && !.gintervals.needs_bigset(intervals.set.out)) {
+                if (!is.null(intervals.set.out) && .gintervals.is_bigset(intervals.set.out, FALSE) && !.gintervals.needs_bigset(intervals.set.out)) {
                     .gintervals.big2small(intervals.set.out)
                 }
             }
@@ -838,6 +856,8 @@ gsummary <- function(expr = NULL, intervals = NULL, iterator = NULL, band = NULL
         stop("Usage: gsummary(expr, intervals = .misha$ALLGENOME, iterator = NULL, band = NULL)", call. = FALSE)
     }
     .gcheckroot()
+
+    intervals <- rescue_ALLGENOME(intervals, as.character(substitute(intervals)))
 
     if (is.null(intervals)) {
         intervals <- get("ALLGENOME", envir = .misha)
@@ -910,6 +930,8 @@ gwilcox <- function(expr = NULL, winsize1 = NULL, winsize2 = NULL, maxpval = 0.0
     }
     .gcheckroot()
 
+    intervals <- rescue_ALLGENOME(intervals, as.character(substitute(intervals)))
+
     if (is.null(intervals)) {
         intervals <- get("ALLGENOME", envir = .misha)
     }
@@ -932,7 +954,7 @@ gwilcox <- function(expr = NULL, winsize1 = NULL, winsize2 = NULL, maxpval = 0.0
         {
             if (!is.null(intervals)) {
                 res <- .gcall("C_gwilcox", exprstr, intervals, winsize1, winsize2, qnorm(maxpval), onetailed, as.integer(what2find), .iterator, intervals.set.out, .misha_env())
-                if (!is.null(intervals.set.out) && .gintervals.is_bigset(intervals.set.out, F) && !.gintervals.needs_bigset(intervals.set.out)) {
+                if (!is.null(intervals.set.out) && .gintervals.is_bigset(intervals.set.out, FALSE) && !.gintervals.needs_bigset(intervals.set.out)) {
                     .gintervals.big2small(intervals.set.out)
                 }
             }
@@ -1014,6 +1036,8 @@ gbins.quantiles <- function(..., expr = NULL, percentiles = 0.5, intervals = get
     }
     .gcheckroot()
 
+    intervals <- rescue_ALLGENOME(intervals, as.character(substitute(intervals)))
+
     exprs <- c()
     breaks <- list()
 
@@ -1086,6 +1110,8 @@ gbins.summary <- function(..., expr = NULL, intervals = get("ALLGENOME", envir =
         stop("Usage: gbins.summary([expr, breaks]+, expr, intervals = .misha$ALLGENOME, include.lowest = FALSE, iterator = NULL, band = NULL)", call. = FALSE)
     }
     .gcheckroot()
+
+    intervals <- rescue_ALLGENOME(intervals, as.character(substitute(intervals)))
 
     exprs <- c()
     breaks <- list()
@@ -1195,6 +1221,8 @@ gseq.extract <- function(intervals = NULL) {
         stop("Usage: gseq.extract(intervals)", call. = FALSE)
     }
     .gcheckroot()
+
+    intervals <- rescue_ALLGENOME(intervals, as.character(substitute(intervals)))
 
     res <- .gcall("gseqread", intervals, .misha_env())
     res

@@ -66,3 +66,18 @@ library(misha)
 #  )
 #  gdb.init("mm10")
 
+## ---- eval = FALSE------------------------------------------------------------
+#  ftp <- "ftp://hgdownload.soe.ucsc.edu/goldenPath/mm39"
+#  gdb.create(
+#      "mm39",
+#      paste(ftp, "chromosomes", paste0("chr", c(1:19, "X", "Y", "M"), ".fa.gz"), sep = "/"),
+#      paste(ftp, "database/knownGene.txt.gz", sep = "/"),
+#      paste(ftp, "database/kgXref.txt.gz", sep = "/"),
+#      c(
+#          "kgID", "mRNA", "spID", "spDisplayID", "geneSymbol",
+#          "refseq", "protAcc", "description", "rfamAcc",
+#          "tRnaName"
+#      )
+#  )
+#  gdb.init("mm39")
+
