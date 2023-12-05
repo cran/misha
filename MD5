@@ -1,7 +1,7 @@
-451be6b1cf0779c798a46957bf1fee4d *DESCRIPTION
+ff22b0776321d7575ecd26f9a3351b1c *DESCRIPTION
 944f6a2a0c86de30f19492040fc9b97b *LICENSE
 0b49fcc17a91eec7ab969ae91367a786 *NAMESPACE
-14d3bf9c4176b3871c26488c42b26a41 *NEWS.md
+25d6425e4ec87edd90a0214039123ed7 *NEWS.md
 98672d63f0df4b4435007b58ea75caaf *R/compute.R
 6104ad97e24a4eb0a5ecd76ec8305236 *R/db.R
 1e7ba72726cdfcfd0e14160c692c848b *R/ftp.R
@@ -23,10 +23,10 @@ a7429b536bccd49cae395968eaee4db9 *inst/WORDLIST
 6f903f2473a48cb0accc327ad1aee186 *inst/bigWigToWig.tar.gz
 b23f0763cf3e9e625595a3e1e0c100dc *inst/doc/Genomes.R
 ccd3e131654200f7318af4b80c0c10bd *inst/doc/Genomes.Rmd
-92f59f5880bb1d74eab7473e48504bdf *inst/doc/Genomes.html
-ccf0158e055f4c1e59acca8b05d93287 *inst/doc/Manual.R
-1dc18297a5601780928e8ae2671d0bac *inst/doc/Manual.Rmd
-1b646b671f83408baac34ecdcbdf02e0 *inst/doc/Manual.html
+cfe748f705a9a6d172ec71455a22d923 *inst/doc/Genomes.html
+02ffc53d1edb17e4116ce0776302c4fa *inst/doc/Manual.R
+a84cb69e595565b7093c36218632256e *inst/doc/Manual.Rmd
+9d8288da41389eb903c016e9925a6856 *inst/doc/Manual.html
 0a0f5fe7ab091ed743761c000ac5e950 *inst/testdb.tar.gz
 2fbd1236c4fcd424ae7c9ef071133f38 *man/dot-misha.Rd
 42d5829ff9cd59590c14a81ab207f569 *man/gbins.quantiles.Rd
@@ -288,7 +288,7 @@ cb61583dcc324413af395ac621d0a24d *src/rdbinterval.cpp
 8827a02a60a4be8c5ceeaed941fe6be0 *src/rdbinterval.h
 72d71f9efacd9bec290ed76b7ae68d17 *src/rdbprogress.cpp
 c37bac95131a781006f9dcc063c65a28 *src/rdbprogress.h
-cb589a38839b3e204dcd9aa1274efeee *src/rdbutils.cpp
+74566adbb08bb36a9e6d76a0d1fc55c6 *src/rdbutils.cpp
 bcd4a6fe6cafb73154542ff2c922ebfd *src/rdbutils.h
 fefec03a8f46e67fce233df9d216eea4 *src/rtest.cpp
 6ec2173428ff39a2644b245444197a40 *src/strutil.cpp
@@ -334,4 +334,4 @@ a5e942b015fef595ed5a50a74a32dd71 *tests/testthat/test-motifs.R
 c696503b30531946b4d007727cfc60fd *tests/testthat/test-track.attrs.R
 94f66c87a2ab04b01916421220280984 *tests/testthat/test-vtrack.R
 ccd3e131654200f7318af4b80c0c10bd *vignettes/Genomes.Rmd
-1dc18297a5601780928e8ae2671d0bac *vignettes/Manual.Rmd
+a84cb69e595565b7093c36218632256e *vignettes/Manual.Rmd

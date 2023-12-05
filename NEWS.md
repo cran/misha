@@ -1,3 +1,11 @@
+# misha 4.2.8
+
+* Fixed "mat string is not a string literal" warnings.
+
+# misha 4.2.7
+
+* Fixed gcc-UBSAN memory misalignment issues.
+
 # misha 4.2.6
 
 * `ALLGENOME` is now only soft deprecated in order to support old misha scripts. 

@@ -1,7 +1,7 @@
 Type: Package
 Package: misha
 Title: Toolkit for Analysis of Genomic Data
-Version: 4.2.6
+Version: 4.2.8
 Authors@R: c(
     person("Misha", "Hoichman", , "misha@hoichman.com", role = "aut"),
     person("Aviezer", "Lifshitz", , "aviezer.lifshitz@weizmann.ac.il", role = c("aut", "cre")),
@@ -30,7 +30,7 @@ NeedsCompilation: yes
 OS_type: unix
 RoxygenNote: 7.2.3
 VignetteBuilder: knitr
-Packaged: 2023-09-13 19:03:25 UTC; aviezerl
+Packaged: 2023-11-30 10:02:12 UTC; aviezerl
 Author: Misha Hoichman [aut],
   Aviezer Lifshitz [aut, cre],
   Eitan Yaffe [aut],
@@ -38,4 +38,4 @@ Author: Misha Hoichman [aut],
   Weizmann Institute of Science [cph]
 Maintainer: Aviezer Lifshitz <aviezer.lifshitz@weizmann.ac.il>
 Repository: CRAN
-Date/Publication: 2023-09-14 09:10:02 UTC
+Date/Publication: 2023-12-05 15:20:02 UTC
