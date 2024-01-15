@@ -1,4 +1,4 @@
-## ---- include = FALSE---------------------------------------------------------
+## ----include = FALSE----------------------------------------------------------
 knitr::opts_chunk$set(
     collapse = TRUE,
     comment = "#>"
@@ -7,7 +7,7 @@ knitr::opts_chunk$set(
 ## ----setup--------------------------------------------------------------------
 library(misha)
 
-## ---- eval = FALSE------------------------------------------------------------
+## ----eval = FALSE-------------------------------------------------------------
 #  ftp <- "ftp://hgdownload.soe.ucsc.edu/goldenPath/hg19"
 #  gdb.create(
 #      "hg19",
@@ -22,7 +22,7 @@ library(misha)
 #  )
 #  gdb.init("hg19")
 
-## ---- eval = FALSE------------------------------------------------------------
+## ----eval = FALSE-------------------------------------------------------------
 #  ftp <- "ftp://hgdownload.soe.ucsc.edu/goldenPath/hg38"
 #  gdb.create(
 #      "hg38",
@@ -37,7 +37,7 @@ library(misha)
 #  )
 #  gdb.init("hg19")
 
-## ---- eval = FALSE------------------------------------------------------------
+## ----eval = FALSE-------------------------------------------------------------
 #  ftp <- "ftp://hgdownload.soe.ucsc.edu/goldenPath/mm9"
 #  gdb.create(
 #      "mm9",
@@ -51,7 +51,7 @@ library(misha)
 #  )
 #  gdb.init("mm9")
 
-## ---- eval = FALSE------------------------------------------------------------
+## ----eval = FALSE-------------------------------------------------------------
 #  ftp <- "ftp://hgdownload.soe.ucsc.edu/goldenPath/mm10"
 #  gdb.create(
 #      "mm10",
@@ -66,7 +66,7 @@ library(misha)
 #  )
 #  gdb.init("mm10")
 
-## ---- eval = FALSE------------------------------------------------------------
+## ----eval = FALSE-------------------------------------------------------------
 #  ftp <- "ftp://hgdownload.soe.ucsc.edu/goldenPath/mm39"
 #  gdb.create(
 #      "mm39",
