@@ -8,6 +8,13 @@ knitr::opts_chunk$set(
 library(misha)
 
 ## ----eval = FALSE-------------------------------------------------------------
+#  gdb.create_genome("hg19") # creates a database for the hg19 genome
+#  gdb.create_genome("hg38") # creates a database for the hg38 genome
+#  gdb.create_genome("mm10") # creates a database for the mm10 genome
+#  gdb.create_genome("mm9") # creates a database for the mm9 genome
+#  gdb.create_genome("mm39") # creates a database for the mm39 genome
+
+## ----eval = FALSE-------------------------------------------------------------
 #  ftp <- "ftp://hgdownload.soe.ucsc.edu/goldenPath/hg19"
 #  gdb.create(
 #      "hg19",
@@ -35,7 +42,7 @@ library(misha)
 #          "tRnaName"
 #      )
 #  )
-#  gdb.init("hg19")
+#  gdb.init("hg38")
 
 ## ----eval = FALSE-------------------------------------------------------------
 #  ftp <- "ftp://hgdownload.soe.ucsc.edu/goldenPath/mm9"

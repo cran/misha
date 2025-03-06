@@ -12,7 +12,11 @@
 #include <vector>
 #include <string>
 #include <string.h>
+#include <memory>
 
+#ifndef R_NO_REMAP
+#  define R_NO_REMAP
+#endif
 #include <R.h>
 #include <Rinternals.h>
 
@@ -22,6 +26,8 @@
 #include "GInterval.h"
 #include "GInterval2D.h"
 #include "TrackExpressionIteratorBase.h"
+#include "PWMScorer.h"
+#include "KmerCounter.h"
 #include "rdbinterval.h"
 #include "rdbutils.h"
 
@@ -82,7 +88,27 @@ public:
     typedef vector<Track_n_imdf> Track_n_imdfs;
 
     struct Track_var {
-        enum Val_func { REG, REG_MIN, REG_MAX, REG_NEAREST, STDDEV, SUM, QUANTILE, PV, PV_MIN, PV_MAX, WEIGHTED_SUM, OCCUPIED_AREA, NUM_FUNCS };
+        enum Val_func
+        {
+            REG,
+            REG_MIN,
+            REG_MAX,
+            REG_NEAREST,
+            STDDEV,
+            SUM,
+            QUANTILE,
+            PV,
+            PV_MIN,
+            PV_MAX,
+            WEIGHTED_SUM,
+            OCCUPIED_AREA,
+            PWM,
+            PWM_MAX,
+            PWM_MAX_POS,
+            KMER_COUNT,
+            KMER_FRAC, 
+            NUM_FUNCS
+        };
 
         static const char *FUNC_NAMES[NUM_FUNCS];
 
@@ -94,12 +120,15 @@ public:
         bool                requires_pv;
         Binned_pv           pv_binned;
         Track_n_imdf       *track_n_imdf;
+        std::unique_ptr<PWMScorer> pwm_scorer;
+        std::unique_ptr<KmerCounter> kmer_counter;
+        char strand;
     };
 
     typedef vector<Track_var> Track_vars;
 
     struct Interv_var {
-        enum Val_func { DIST, DIST_CENTER, NUM_FUNCS };
+        enum Val_func { DIST, DIST_CENTER, COVERAGE, NUM_FUNCS };
 
         static const char *FUNC_NAMES[NUM_FUNCS];
 
@@ -132,12 +161,14 @@ public:
 	void define_r_vars(unsigned size);
     const Track_var *var(const char *var_name) const;
 
+    bool is_seq_variable(unsigned ivar) const;
+
 	void set_vars(const GInterval &interval, unsigned idx);
 	void set_vars(const GInterval2D &interval, const DiagonalBand &band, unsigned idx);
 
 private:
-	rdb::IntervUtils       &m_iu;
-	string                  m_groot;
+    rdb::IntervUtils &m_iu;
+    string                  m_groot;
 	Track_vars              m_track_vars;
 	Interv_vars             m_interv_vars;
 	Track_n_imdfs           m_track_n_imdfs;
@@ -164,6 +195,19 @@ private:
 	void set_vars(unsigned idx);
 
 	bool is_var(const string &str, uint64_t start, uint64_t end) const { return (!start || !rdb::is_R_var_char(str[start - 1])) && (end == str.size() || !rdb::is_R_var_char(str[end])); }
+
+    static int findListElementIndex(SEXP list, const char* name) {
+        SEXP names = Rf_getAttrib(list, R_NamesSymbol);
+        if (names == R_NilValue)
+            rdb::verror("List must have named elements");
+            
+        int len = Rf_length(list);
+        for (int i = 0; i < len; i++) {
+            if (strcmp(CHAR(STRING_ELT(names, i)), name) == 0)
+                return i;
+        }
+        return -1;  // Element not found
+    }
 };
 
 
@@ -212,6 +256,14 @@ inline const TrackExpressionVars::Track_var *TrackExpressionVars::var(const char
             return &*ivar;
     }
     return NULL;
+}
+
+inline bool TrackExpressionVars::is_seq_variable(unsigned ivar) const {
+    return m_track_vars[ivar].val_func == Track_var::PWM ||
+           m_track_vars[ivar].val_func == Track_var::PWM_MAX ||
+           m_track_vars[ivar].val_func == Track_var::PWM_MAX_POS ||
+           m_track_vars[ivar].val_func == Track_var::KMER_COUNT ||
+           m_track_vars[ivar].val_func == Track_var::KMER_FRAC;
 }
 
 #endif /* TRACKEXPRESSIONVARS_H_ */

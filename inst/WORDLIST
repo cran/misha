@@ -1,3 +1,4 @@
+ACGT
 ALGENOME
 ALLGENOME
 BedGraph
@@ -29,10 +30,9 @@ GWD
 Gb
 GenomeTrack
 INTERVID
+Kmer
 LTO
 NA's
-NaN
-NaNs
 NxM
 OSX
 PKGDIR
@@ -41,6 +41,7 @@ PSSMs
 PV
 PWM
 PeakIntervals
+Pseudocount
 Rami
 Rprofile
 SGE
@@ -60,6 +61,7 @@ autocomplete
 autocompletion
 autocorr
 bedGraph
+bidirect
 bigset
 binsize
 bool
@@ -86,6 +88,7 @@ eshift
 eval
 expr
 fasta
+frac
 func
 fun’
 gapply
@@ -165,6 +168,8 @@ intervsets
 intevals
 intra
 kgID
+kmer
+kmers
 le
 libR
 liftover
@@ -182,6 +187,7 @@ maxpval
 maxread
 maxval
 mem
+mers
 mindist
 minsegment
 minval
@@ -192,14 +198,18 @@ nans
 nbash
 neighbouring
 ng
+noRemap
 notfound
 num
 numbins
 onexit
 params
+pos
 probs
 proj
 ps
+pseudocounts
+pssm
 pssms
 pssmset
 ptr
@@ -230,12 +240,14 @@ tgt
 thr
 tibbles
 tmp
+tmpdir
 trackdb
 trackname
 tracknames
 trackset
 tracksets
 tss
+ucsc
 undefine
 unevaluated
 unprotect

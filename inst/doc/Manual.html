@@ -60,7 +60,7 @@ div.sourceCode { overflow: auto; }
 }
 @media print {
 pre > code.sourceCode { white-space: pre-wrap; }
-pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+pre > code.sourceCode > span { display: inline-block; text-indent: -5em; padding-left: 5em; }
 }
 pre.numberSource code
 { counter-reset: source-line 0; }
@@ -355,9 +355,10 @@ fundamental concepts of the package such as <em>track expression</em>,
 <p>Genomic Database starts with a <em>root</em> (also frequently
 referred as <em>GROOT</em>), i.e. top directory containing certain
 subdirectories and files. A new database can be created using
-<code>gdb.create</code> function. This is the easiest way to do it. One
-can also build a database manually by generating all the necessary
-components that will be described later in this document.</p>
+<code>gdb.create_genome</code> and <code>gdb.create</code> functions.
+This is the easiest way to do it, see the “Genomes” vignette for more
+details. One can also build a database manually by generating all the
+necessary components that will be described later in this document.</p>
 <p>Before the data in a Genomic Database can be accessed one must
 establish connection with it by calling <code>gdb.init</code> function.
 On launch the package connects to a Genomic Database located in

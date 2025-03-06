@@ -1,3 +1,50 @@
+# misha 4.3.6 
+
+* Fixed memory alignment issues in clang-UBSAN.    
+
+# misha 4.3.5 
+
+* Bug fix in "coverage" virtual track function: incorrect results on some cases when query intervals where from different chromosomes.
+
+# misha 4.3.4 
+
+* Added "kmer.count" and "kmer.frac" virtual track functions that calculate the number of k-mers and the fraction of k-mers in the current iterator interval.
+
+# misha 4.3.3
+
+* Added "coverage" virtual track function that calculates the fraction that iterator intervals are covered by given source intervals.
+
+# misha 4.3.2 
+
+* Added requirement for C++14 standard.
+
+# misha 4.3.1 
+
+* Fixed compilation issue on Ubuntu devel.
+
+# misha 4.3.0
+
+* Added PWM functions: "pwm", "pwm.max" and "pwm.max.pos" are new virtual track functions. 
+* Added `grevcomp` function (reverse complement of a DNA sequence).
+
+# misha 4.2.14
+
+* Better error message in `gvtrack.create`.
+
+# misha 4.2.13
+
+* Added `gdb.create_genome` function.
+* removed non-API calls to R: `R_curErrorBuf`, `SET_TYPEOF`
+
+# misha 4.2.12
+
+* Fixed *noRemap* additional issue by adding `Rf_` prefix in the c++ code.
+* Removed non-API calls to R in the C++ code.
+
+# misha 4.2.10 
+
+* Fixed a bug in `gtrack.import` from bigwig.
+
 # misha 4.2.9
 
 * Fixed compilation issues in M1 Mac.

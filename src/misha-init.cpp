@@ -1,3 +1,6 @@
+#ifndef R_NO_REMAP
+#  define R_NO_REMAP
+#endif
 #include <R.h>
 #include <R_ext/Rdynload.h>
 #include <Rinternals.h>
@@ -71,6 +74,7 @@ extern "C" {
     extern SEXP gtracksummary(SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gtracksummary_multitask(SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP C_gwilcox(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+    extern SEXP C_revcomp(SEXP);
 }
 
 static const R_CallMethodDef CallEntries[] = {
@@ -141,6 +145,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"gtracksummary", (DL_FUNC)&gtracksummary, 5},
     {"gtracksummary_multitask", (DL_FUNC)&gtracksummary_multitask, 5},
     {"C_gwilcox", (DL_FUNC)&C_gwilcox, 10},
+    {"C_revcomp", (DL_FUNC)&C_revcomp, 1},
     {NULL, NULL, 0}
 };
 
