@@ -9,6 +9,41 @@
 #ifndef RDBUTILS_H_
 #define RDBUTILS_H_
 
+#if defined(__APPLE__)
+#include <sys/time.h>
+#include <mach/mach_time.h>
+#include <mach/clock.h>
+#include <mach/mach.h>
+
+// Define clock identifiers for macOS if not already defined
+#ifndef CLOCK_REALTIME
+#define CLOCK_REALTIME 0
+#endif
+
+// Mark intentionally unused fallback helpers to suppress warnings in units
+// that include this header but do not call them.
+#if defined(__clang__) || defined(__GNUC__)
+#define MISHA_MAYBE_UNUSED __attribute__((unused))
+#else
+#define MISHA_MAYBE_UNUSED
+#endif
+
+// Implement clock_gettime for macOS if needed (pre-Sierra 10.12)
+#if !defined(HAVE_CLOCK_GETTIME)
+static inline MISHA_MAYBE_UNUSED int clock_gettime(int clk_id, struct timespec *t)
+{
+	struct timeval tv;
+	if (gettimeofday(&tv, NULL) < 0)
+	{
+		return -1;
+	}
+	t->tv_sec = tv.tv_sec;
+	t->tv_nsec = tv.tv_usec * 1000;
+	return 0;
+}
+#endif
+#endif
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -81,6 +116,10 @@ void verror(const char *fmt, ...);
 // Use rprotect instead of PROTECT!
 SEXP rprotect(SEXP &expr);
 
+// Like rprotect(SEXP&) but takes the object by value to avoid rchk
+// "address taken" notes for local variables.
+SEXP rprotect_ptr(SEXP expr);
+
 // Unprotect the last "count" object
 void runprotect(int count);
 
@@ -146,6 +185,29 @@ SEXP RSaneUnserialize(const char *fname);
 SEXP RSaneAllocVector(SEXPTYPE type, R_xlen_t len);
 
 SEXP get_rvector_col(SEXP v, const char *colname, const char *varname, bool error_if_missing);
+// Helper: safely find a symbol in the package's .misha environment.
+// Note: the returned SEXP is not protected. PROTECT it if you will perform
+// any allocations before you are done using it.
+static inline SEXP find_in_misha(SEXP envir, const char *name) {
+    SEXP misha_env = R_NilValue;
+    misha_env = rprotect_ptr(Rf_findVar(Rf_install(".misha"), envir));
+    SEXP val = Rf_findVar(Rf_install(name), misha_env);
+    runprotect(1);
+    return val;
+}
+
+// Helper: safely define a symbol in the package's .misha environment.
+// Ensures both the target environment and the value are protected
+// during the Rf_defineVar call.
+static inline void define_in_misha(SEXP envir, const char *name, SEXP value) {
+    SEXP misha_env = R_NilValue;
+    misha_env = rprotect_ptr(Rf_findVar(Rf_install(".misha"), envir));
+    SEXP tmp = value;
+    tmp = rprotect_ptr(tmp);
+    Rf_defineVar(Rf_install(name), tmp, misha_env);
+    runprotect(2);
+}
+
 
 void prepare4multitasking(uint64_t res_const_size, uint64_t res_var_size, uint64_t max_res_size, uint64_t max_mem_usage, unsigned num_planned_kids);
 
@@ -370,6 +432,7 @@ private:
 	friend void rdb::runprotect(SEXP &expr);
 	friend void rdb::runprotect(vector<SEXP> &exprs);
 	friend void rdb::runprotect_all();
+		friend SEXP rdb::rprotect_ptr(SEXP expr);
 	friend void rdb::rerror(const char *fmt, ...);
 	friend void rdb::verror(const char *fmt, ...);
 	friend void rdb::prepare4multitasking(uint64_t res_const_size, uint64_t res_var_size, uint64_t max_res_size, uint64_t max_mem_usage, unsigned num_planned_kids);
@@ -401,6 +464,15 @@ inline void rexit() {
 	} else {
 		rdb::verror("rexit is called from parent process");
 	}
+}
+
+inline SEXP rdb::rprotect_ptr(SEXP expr)
+{
+    if (expr != R_NilValue) {
+        RdbInitializer::s_protect_counter++;
+        return PROTECT(expr);
+    }
+    return expr;
 }
 
 inline void rdb::set_abs_timeout(int64_t delay_msec, struct timespec &req)

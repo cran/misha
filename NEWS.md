@@ -1,3 +1,25 @@
+# misha 4.3.11
+
+* Removed C++14 requirement.
+
+# misha 4.3.9
+
+* Fixed a bug in `pwm` and `kmer` virtual track functions: iterator shifts were not applied. 
+* Internal: address CRAN rchk notes and improve memory protection.
+
+# misha 4.3.8
+
+* Added `colnames` parameter to `gintervals.mapply` function.
+* Added `attrs` parameter to `gtrack.import` function.
+* Added `created.user` default attribute in track creation functions.
+* Support BED files in `gtrack.import` function.
+
+# misha 4.3.7
+
+* Added `gtrack.create_dense` function - creates a dense track from an intervals and values.
+* Fixed compilation error in old versions of macOS (`clock_gettime` is missing).
+* Fixed a bug in `gtrack.import_bigwig`: `intern` argument was not passed to `system` calls.
+
 # misha 4.3.6 
 
 * Fixed memory alignment issues in clang-UBSAN.    

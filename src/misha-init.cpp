@@ -40,8 +40,8 @@ extern "C" {
     extern SEXP gintervsort(SEXP, SEXP);
     extern SEXP gintervunion(SEXP, SEXP, SEXP);
     extern SEXP giterator_intervals(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
-    extern SEXP gmapply(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
-    extern SEXP gmapply_multitask(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+    extern SEXP gmapply(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+    extern SEXP gmapply_multitask(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP C_gpartition(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP C_gquantiles(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gquantiles_multitask(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
@@ -59,6 +59,7 @@ extern "C" {
     extern SEXP gtrackconvert(SEXP, SEXP, SEXP);
     extern SEXP gtrack_create_meta(SEXP, SEXP);
     extern SEXP gtrackcreate_multitask(SEXP, SEXP, SEXP, SEXP, SEXP);
+    extern SEXP gtrack_create_dense(SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gtrack_create_sparse(SEXP, SEXP, SEXP, SEXP);
     extern SEXP gtrack_create_track2d(SEXP, SEXP, SEXP, SEXP);
     extern SEXP gtrackcreate(SEXP, SEXP, SEXP, SEXP, SEXP);
@@ -111,8 +112,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"gintervsort", (DL_FUNC)&gintervsort, 2},
     {"gintervunion", (DL_FUNC)&gintervunion, 3},
     {"giterator_intervals", (DL_FUNC)&giterator_intervals, 6},
-    {"gmapply", (DL_FUNC)&gmapply, 8},
-    {"gmapply_multitask", (DL_FUNC)&gmapply_multitask, 8},
+    {"gmapply", (DL_FUNC)&gmapply, 9},
+    {"gmapply_multitask", (DL_FUNC)&gmapply_multitask, 9},
     {"C_gpartition", (DL_FUNC)&C_gpartition, 8},
     {"C_gquantiles", (DL_FUNC)&C_gquantiles, 6},
     {"gquantiles_multitask", (DL_FUNC)&gquantiles_multitask, 6},
@@ -130,6 +131,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"gtrackconvert", (DL_FUNC)&gtrackconvert, 3},
     {"gtrack_create_meta", (DL_FUNC)&gtrack_create_meta, 2},
     {"gtrackcreate_multitask", (DL_FUNC)&gtrackcreate_multitask, 5},
+    {"gtrack_create_dense", (DL_FUNC)&gtrack_create_dense, 5},
     {"gtrack_create_sparse", (DL_FUNC)&gtrack_create_sparse, 4},
     {"gtrack_create_track2d", (DL_FUNC)&gtrack_create_track2d, 4},
     {"gtrackcreate", (DL_FUNC)&gtrackcreate, 5},
