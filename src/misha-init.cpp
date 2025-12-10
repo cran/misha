@@ -12,7 +12,7 @@ extern "C" {
     extern SEXP gbins_quantiles(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gbins_summary(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gbintransform(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
-    extern SEXP gchain2interv(SEXP, SEXP);
+    extern SEXP gchain2interv(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gcheck_iterator(SEXP, SEXP);
     extern SEXP gcheck_vtrack(SEXP, SEXP);
     extern SEXP C_gcis_decay(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
@@ -23,7 +23,7 @@ extern "C" {
     extern SEXP gcreate_test_computer2d_track(SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP C_gextract(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gextract_multitask(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
-    extern SEXP gfind_neighbors(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+    extern SEXP gfind_neighbors(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gfind_tracks_n_intervals(SEXP, SEXP);
     extern SEXP gget_tracks_attrs(SEXP, SEXP, SEXP);
     extern SEXP gintervals_chrom_sizes(SEXP, SEXP);
@@ -37,7 +37,7 @@ extern "C" {
     extern SEXP gintervdiff(SEXP, SEXP, SEXP);
     extern SEXP ginterv_intersectband(SEXP, SEXP, SEXP, SEXP);
     extern SEXP gintervintersect(SEXP, SEXP, SEXP);
-    extern SEXP gintervs_liftover(SEXP, SEXP, SEXP);
+    extern SEXP gintervs_liftover(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gintervsort(SEXP, SEXP);
     extern SEXP gintervunion(SEXP, SEXP, SEXP);
     extern SEXP giterator_intervals(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
@@ -52,6 +52,7 @@ extern "C" {
     extern SEXP gscreen_multitask(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP C_gsegment(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gseqimport(SEXP, SEXP, SEXP);
+    extern SEXP gseq_multifasta_import(SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gseqread(SEXP, SEXP);
     extern SEXP gset_tracks_attrs(SEXP, SEXP, SEXP, SEXP);
     extern SEXP gsmooth(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
@@ -64,6 +65,10 @@ extern "C" {
     extern SEXP gtrack_create_sparse(SEXP, SEXP, SEXP, SEXP);
     extern SEXP gtrack_create_track2d(SEXP, SEXP, SEXP, SEXP);
     extern SEXP gtrackcreate(SEXP, SEXP, SEXP, SEXP, SEXP);
+    extern SEXP gtrack_convert_to_indexed_format(SEXP, SEXP, SEXP);
+    extern SEXP gtrack_create_empty_indexed(SEXP, SEXP);
+    extern SEXP ginterv_convert(SEXP, SEXP, SEXP);
+    extern SEXP ginterv2d_convert(SEXP, SEXP, SEXP);
     extern SEXP gtrackdist(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gtrackdist_multitask(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gtrack_import_contacts(SEXP, SEXP, SEXP, SEXP, SEXP);
@@ -71,12 +76,18 @@ extern "C" {
     extern SEXP gtrackimportwig(SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gtrackinfo(SEXP, SEXP);
     extern SEXP gtrack_intervals_load(SEXP, SEXP, SEXP, SEXP, SEXP);
-    extern SEXP gtrack_liftover(SEXP, SEXP, SEXP, SEXP);
+    extern SEXP gbigintervs_load_chrom(SEXP, SEXP, SEXP);
+    extern SEXP gbigintervs_load_chrom2d(SEXP, SEXP, SEXP, SEXP);
+    extern SEXP gtrack_liftover(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gtrack_modify(SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gtracksummary(SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gtracksummary_multitask(SEXP, SEXP, SEXP, SEXP, SEXP);
-    extern SEXP C_gwilcox(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+    extern SEXP C_gwilcox(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);    
     extern SEXP C_revcomp(SEXP);
+    extern SEXP C_grandom_genome(SEXP, SEXP, SEXP, SEXP, SEXP);
+    extern SEXP C_gseq_pwm(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+    extern SEXP C_gseq_pwm_multitask(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+    extern SEXP C_gseq_kmer(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 }
 
 static const R_CallMethodDef CallEntries[] = {
@@ -85,7 +96,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"gbins_quantiles", (DL_FUNC)&gbins_quantiles, 8},
     {"gbins_summary", (DL_FUNC)&gbins_summary, 7},
     {"gbintransform", (DL_FUNC)&gbintransform, 10},
-    {"gchain2interv", (DL_FUNC)&gchain2interv, 2},
+    {"gchain2interv", (DL_FUNC)&gchain2interv, 6},
     {"gcheck_iterator", (DL_FUNC)&gcheck_iterator, 2},
     {"gcheck_vtrack", (DL_FUNC)&gcheck_vtrack, 2},
     {"C_gcis_decay", (DL_FUNC)&C_gcis_decay, 9},
@@ -96,7 +107,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"gcreate_test_computer2d_track", (DL_FUNC)&gcreate_test_computer2d_track, 5},
     {"C_gextract", (DL_FUNC)&C_gextract, 8},
     {"gextract_multitask", (DL_FUNC)&gextract_multitask, 8},
-    {"gfind_neighbors", (DL_FUNC)&gfind_neighbors, 12},
+    {"gfind_neighbors", (DL_FUNC)&gfind_neighbors, 13},
     {"gfind_tracks_n_intervals", (DL_FUNC)&gfind_tracks_n_intervals, 2},
     {"gget_tracks_attrs", (DL_FUNC)&gget_tracks_attrs, 3},
     {"gintervals_chrom_sizes", (DL_FUNC)&gintervals_chrom_sizes, 2},
@@ -110,7 +121,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"gintervdiff", (DL_FUNC)&gintervdiff, 3},
     {"ginterv_intersectband", (DL_FUNC)&ginterv_intersectband, 4},
     {"gintervintersect", (DL_FUNC)&gintervintersect, 3},
-    {"gintervs_liftover", (DL_FUNC)&gintervs_liftover, 3},
+    {"gintervs_liftover", (DL_FUNC)&gintervs_liftover, 7},
     {"gintervsort", (DL_FUNC)&gintervsort, 2},
     {"gintervunion", (DL_FUNC)&gintervunion, 3},
     {"giterator_intervals", (DL_FUNC)&giterator_intervals, 6},
@@ -125,6 +136,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"gscreen_multitask", (DL_FUNC)&gscreen_multitask, 6},
     {"C_gsegment", (DL_FUNC)&C_gsegment, 8},
     {"gseqimport", (DL_FUNC)&gseqimport, 3},
+    {"gseq_multifasta_import", (DL_FUNC)&gseq_multifasta_import, 5},
     {"gseqread", (DL_FUNC)&gseqread, 2},
     {"gset_tracks_attrs", (DL_FUNC)&gset_tracks_attrs, 4},
     {"gsmooth", (DL_FUNC)&gsmooth, 8},
@@ -137,6 +149,10 @@ static const R_CallMethodDef CallEntries[] = {
     {"gtrack_create_sparse", (DL_FUNC)&gtrack_create_sparse, 4},
     {"gtrack_create_track2d", (DL_FUNC)&gtrack_create_track2d, 4},
     {"gtrackcreate", (DL_FUNC)&gtrackcreate, 5},
+    {"gtrack_convert_to_indexed_format", (DL_FUNC)&gtrack_convert_to_indexed_format, 3},
+    {"gtrack_create_empty_indexed", (DL_FUNC)&gtrack_create_empty_indexed, 2},
+    {"ginterv_convert", (DL_FUNC)&ginterv_convert, 3},
+    {"ginterv2d_convert", (DL_FUNC)&ginterv2d_convert, 3},
     {"gtrackdist", (DL_FUNC)&gtrackdist, 7},
     {"gtrackdist_multitask", (DL_FUNC)&gtrackdist_multitask, 7},
     {"gtrack_import_contacts", (DL_FUNC)&gtrack_import_contacts, 5},
@@ -144,12 +160,18 @@ static const R_CallMethodDef CallEntries[] = {
     {"gtrackimportwig", (DL_FUNC)&gtrackimportwig, 5},
     {"gtrackinfo", (DL_FUNC)&gtrackinfo, 2},
     {"gtrack_intervals_load", (DL_FUNC)&gtrack_intervals_load, 5},
-    {"gtrack_liftover", (DL_FUNC)&gtrack_liftover, 4},
+    {"gbigintervs_load_chrom", (DL_FUNC)&gbigintervs_load_chrom, 3},
+    {"gbigintervs_load_chrom2d", (DL_FUNC)&gbigintervs_load_chrom2d, 4},
+    {"gtrack_liftover", (DL_FUNC)&gtrack_liftover, 11},
     {"gtrack_modify", (DL_FUNC)&gtrack_modify, 5},
     {"gtracksummary", (DL_FUNC)&gtracksummary, 5},
     {"gtracksummary_multitask", (DL_FUNC)&gtracksummary_multitask, 5},
-    {"C_gwilcox", (DL_FUNC)&C_gwilcox, 10},
+    {"C_gwilcox", (DL_FUNC)&C_gwilcox, 10},    
     {"C_revcomp", (DL_FUNC)&C_revcomp, 1},
+    {"C_grandom_genome", (DL_FUNC)&C_grandom_genome, 5},
+    {"C_gseq_pwm", (DL_FUNC)&C_gseq_pwm, 16},
+    {"C_gseq_pwm_multitask", (DL_FUNC)&C_gseq_pwm_multitask, 17},
+    {"C_gseq_kmer", (DL_FUNC)&C_gseq_kmer, 9},
     {NULL, NULL, 0}
 };
 

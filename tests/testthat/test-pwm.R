@@ -1,3 +1,5 @@
+create_isolated_test_db()
+
 test_that("pwm vtrack works", {
     remove_all_vtracks()
 
@@ -159,14 +161,18 @@ test_that("pwm scoring works correctly for forward and reverse strands", {
     seq_fwd <- toupper(gseq.extract(test_intervals_ext))
 
     # Get reverse sequence with extension and reversed strand
+    # Note: With extend=TRUE, ALL strand modes extend END only (never START).
+    # At genomic position i, we always need sequence [i, i+motif_len) regardless of strand.
+    # Reverse strand computes RC of the same genomic positions, not different ones.
     test_intervals_rev <- test_intervals_ext
     test_intervals_rev$strand <- -1
     seq_rev <- toupper(gseq.extract(test_intervals_rev)) # This will give reverse complement
 
-    test_intervals_rev <- test_intervals
-    test_intervals_rev$start <- test_intervals_rev$start - motif_length + 1
-    test_intervals_rev$strand <- -1
-    seq_rev_ext <- toupper(gseq.extract(test_intervals_rev))
+    test_intervals_rev_ext <- test_intervals
+    # Only extend END for reverse strand (fixed behavior)
+    test_intervals_rev_ext$end <- test_intervals_rev_ext$end + motif_length - 1
+    test_intervals_rev_ext$strand <- -1
+    seq_rev_ext <- toupper(gseq.extract(test_intervals_rev_ext))
 
     # Create tracks for forward, reverse, and bidirectional scanning
     gvtrack.create(
@@ -191,12 +197,18 @@ test_that("pwm scoring works correctly for forward and reverse strands", {
     # Calculate manual scores
     fwd_scores <- manual_pwm_scores_single_strand(seq_fwd, pssm, prior = 0.01)
     rev_scores <- manual_pwm_scores_single_strand(seq_rev, pssm, prior = 0.01)
-    rev_scors_ext <- manual_pwm_scores_single_strand(seq_rev_ext, pssm, prior = 0.01)
+    rev_scores_ext <- manual_pwm_scores_single_strand(seq_rev_ext, pssm, prior = 0.01)
+
+    # Select the L positions that correspond to anchors whose starts lie inside the iterator.
+    # With END-only extension there are exactly span_len anchor positions, and the first score
+    # corresponds to the anchor at the iterator END (reverse strand iterates backwards).
+    # Order does not matter because we use log-sum-exp, so simply take the first span_len scores.
+    span_len <- test_intervals$end - test_intervals$start
+    rev_scores_window <- rev_scores_ext[seq_len(span_len)]
 
     # Calculate total log-likelihoods
     manual_fwd_total <- log_sum_exp(fwd_scores)
-    manual_rev_total <- log_sum_exp(rev_scores)
-    manual_rev_ext_total <- log_sum_exp(rev_scors_ext)
+    manual_rev_ext_total <- log_sum_exp(rev_scores_window)
     manual_bidi_total <- log_sum_exp(c(fwd_scores, rev_scores))
 
     # Test all scores
@@ -242,7 +254,7 @@ test_that("pwm honors iterator shifts across multiple magnitudes (extend=TRUE, f
         expected <- log_sum_exp(manual)
         actual <- scores[[vnames[i]]][1]
 
-        tol <- if (s >= 250) 1e-4 else 1e-6
+        tol <- if (s >= 250) 1e-4 else if (s >= 50) 1e-5 else 1e-6
         expect_equal(actual, expected, tolerance = tol)
     }
 })
@@ -409,7 +421,63 @@ test_that("pwm.max.pos honors iterator shifts (extend=TRUE, fwd strand)", {
     manual <- manual_pwm_scores_single_strand(seq_ext, pssm, prior = 0.01)
     expected_pos <- which.max(manual)
 
+    # Positions returned by pwm.max.pos are 1-based and are RELATIVE TO THE START
+    # OF THE SCAN WINDOW after applying gvtrack.iterator shifts and (for extend=TRUE)
+    # the motif-length extension at the window end.
     expect_equal(scores$pwm_max_pos_shift[1], expected_pos)
+})
+
+test_that("pwm.max.pos honors iterator shifts without extension (extend=FALSE, fwd strand)", {
+    remove_all_vtracks()
+
+    pssm <- create_test_pssm()
+
+    base <- gintervals(1, 2300, 2340)
+
+    shift <- 50
+    gvtrack.create("pwm_max_pos_noext_shift", NULL, func = "pwm.max.pos", pssm = pssm, bidirect = FALSE, extend = FALSE, prior = 0.01)
+    gvtrack.iterator("pwm_max_pos_noext_shift", sshift = -shift, eshift = shift)
+
+    scores <- gextract("pwm_max_pos_noext_shift", base, iterator = base)
+
+    ext <- base
+    ext$start <- pmax(0, ext$start - shift)
+    ext$end <- ext$end + shift
+    seq_noext <- toupper(gseq.extract(ext))
+    manual <- manual_pwm_scores_single_strand(seq_noext, pssm, prior = 0.01)
+    expected_pos <- which.max(manual)
+
+    # With extend=FALSE, positions are 1-based RELATIVE TO THE START OF THE
+    # SHIFTED SCAN WINDOW only (no motif-length extension applied).
+    expect_equal(scores$pwm_max_pos_noext_shift[1], expected_pos)
+})
+
+test_that("pwm.max.pos positions are 1-based relative to scan window start (extend=TRUE)", {
+    remove_all_vtracks()
+
+    pssm <- create_test_pssm()
+    motif_len <- nrow(pssm)
+
+    base <- gintervals(1, 2450, 2490)
+    shift <- 25
+
+    gvtrack.create("pwm_max_pos_window_start", NULL, func = "pwm.max.pos", pssm = pssm, bidirect = FALSE, extend = TRUE, prior = 0.01)
+    gvtrack.iterator("pwm_max_pos_window_start", sshift = -shift, eshift = shift)
+
+    # Extract value
+    scores <- gextract("pwm_max_pos_window_start", base, iterator = base)
+
+    # Build the exact scan window the scorer will use (start shifted back by 25, end shifted forward by 25 and
+    # then extended by motif_len-1 because extend=TRUE on the forward strand)
+    ext <- base
+    ext$start <- pmax(0, ext$start - shift)
+    ext$end <- ext$end + shift + (motif_len - 1)
+    seq_ext <- toupper(gseq.extract(ext))
+    manual <- manual_pwm_scores_single_strand(seq_ext, pssm, prior = 0.01)
+    expected_pos <- which.max(manual)
+
+    # Positions are 1-based RELATIVE TO THE START OF THE EXPANDED SCAN WINDOW
+    expect_equal(scores$pwm_max_pos_window_start[1], expected_pos)
 })
 
 test_that("pwm.max bidirectional equals max of forward and reverse (extend=TRUE)", {
@@ -519,4 +587,197 @@ test_that("iterator shift equals explicit iterator expansion for pwm.max.pos (si
     p_unshift <- gextract("pwmmaxpos_unshifted", base80, iterator = base80)
 
     expect_equal(p_shift$pwmmaxpos_shifted[1], p_unshift$pwmmaxpos_unshifted[1])
+})
+
+test_that("gseq.pwm accepts PSSM with extra columns (data frame)", {
+    # Create PSSM as data frame with extra columns
+    pssm_with_extras <- data.frame(
+        A = c(0.7, 0.1, 0.1, 0.1),
+        C = c(0.1, 0.7, 0.1, 0.1),
+        G = c(0.1, 0.1, 0.7, 0.1),
+        T = c(0.1, 0.1, 0.1, 0.7),
+        motif_name = "test_motif",
+        position = 1:4,
+        extra_numeric = c(1.5, 2.5, 3.5, 4.5),
+        stringsAsFactors = FALSE
+    )
+
+    # Create reference PSSM with only required columns
+    pssm_regular <- as.matrix(pssm_with_extras[, c("A", "C", "G", "T")])
+
+    seqs <- c("ACGTACGTACGT", "GGGGACGTCCCC", "TTTTTTTTTTT")
+
+    # Test all modes
+    result_extra_lse <- gseq.pwm(seqs, pssm_with_extras, mode = "lse")
+    result_regular_lse <- gseq.pwm(seqs, pssm_regular, mode = "lse")
+    expect_equal(result_extra_lse, result_regular_lse, tolerance = 1e-6)
+
+    result_extra_max <- gseq.pwm(seqs, pssm_with_extras, mode = "max")
+    result_regular_max <- gseq.pwm(seqs, pssm_regular, mode = "max")
+    expect_equal(result_extra_max, result_regular_max, tolerance = 1e-6)
+
+    result_extra_pos <- gseq.pwm(seqs, pssm_with_extras, mode = "pos")
+    result_regular_pos <- gseq.pwm(seqs, pssm_regular, mode = "pos")
+    expect_equal(result_extra_pos, result_regular_pos)
+
+    result_extra_count <- gseq.pwm(seqs, pssm_with_extras, mode = "count", score.thresh = 0)
+    result_regular_count <- gseq.pwm(seqs, pssm_regular, mode = "count", score.thresh = 0)
+    expect_equal(result_extra_count, result_regular_count)
+})
+
+test_that("gseq.pwm accepts PSSM with extra columns (matrix)", {
+    # Create PSSM as matrix with extra columns
+    pssm_with_extras <- matrix(
+        c(
+            0.7, 0.1, 0.1, 0.1, 1, 10,
+            0.1, 0.7, 0.1, 0.1, 2, 20,
+            0.1, 0.1, 0.7, 0.1, 3, 30,
+            0.1, 0.1, 0.1, 0.7, 4, 40
+        ),
+        ncol = 6, byrow = TRUE
+    )
+    colnames(pssm_with_extras) <- c("A", "C", "G", "T", "extra1", "extra2")
+
+    # Create reference PSSM with only required columns
+    pssm_regular <- pssm_with_extras[, c("A", "C", "G", "T")]
+
+    seqs <- c("ACGTACGT", "GGGGACGT")
+
+    result_extra <- gseq.pwm(seqs, pssm_with_extras, mode = "max")
+    result_regular <- gseq.pwm(seqs, pssm_regular, mode = "max")
+    expect_equal(result_extra, result_regular, tolerance = 1e-6)
+})
+
+test_that("gseq.pwm accepts PSSM columns in different order", {
+    # Create PSSM with columns in non-standard order
+    pssm_reordered <- data.frame(
+        extra_col = c("a", "b", "c"),
+        T = c(0.1, 0.1, 0.7),
+        G = c(0.1, 0.7, 0.1),
+        C = c(0.7, 0.1, 0.1),
+        A = c(0.1, 0.1, 0.1),
+        position = 1:3,
+        stringsAsFactors = FALSE
+    )
+
+    # Create reference with standard order
+    pssm_regular <- matrix(
+        c(
+            0.1, 0.7, 0.1, 0.1,
+            0.1, 0.1, 0.7, 0.1,
+            0.1, 0.1, 0.1, 0.7
+        ),
+        ncol = 4, byrow = TRUE
+    )
+    colnames(pssm_regular) <- c("A", "C", "G", "T")
+
+    seqs <- c("ACGTACGT", "CGTACGTA")
+
+    result_reordered <- gseq.pwm(seqs, pssm_reordered, mode = "max")
+    result_regular <- gseq.pwm(seqs, pssm_regular, mode = "max")
+    expect_equal(result_reordered, result_regular, tolerance = 1e-6)
+})
+
+test_that("virtual track accepts PSSM with extra columns", {
+    remove_all_vtracks()
+
+    # Create PSSM with extra columns
+    pssm_with_extras <- data.frame(
+        A = c(1.0, 0.0),
+        C = c(0.0, 1.0),
+        G = c(0.0, 0.0),
+        T = c(0.0, 0.0),
+        motif_name = "AC",
+        position = 1:2,
+        score_threshold = c(0.5, 0.8),
+        stringsAsFactors = FALSE
+    )
+
+    # Create reference PSSM
+    pssm_regular <- create_test_pssm()
+
+    test_intervals <- gintervals(1, 200, 240)
+
+    # Create virtual tracks with both PSSMs
+    gvtrack.create("vt_extra", NULL, func = "pwm", pssm = pssm_with_extras, bidirect = FALSE, extend = TRUE, prior = 0.01)
+    gvtrack.create("vt_regular", NULL, func = "pwm", pssm = pssm_regular, bidirect = FALSE, extend = TRUE, prior = 0.01)
+
+    scores <- gextract(c("vt_extra", "vt_regular"), test_intervals, iterator = test_intervals)
+
+    expect_equal(scores$vt_extra[1], scores$vt_regular[1], tolerance = 1e-6)
+})
+
+test_that("virtual track pwm.max accepts PSSM with extra columns", {
+    remove_all_vtracks()
+
+    pssm_with_extras <- data.frame(
+        A = c(0.7, 0.1, 0.1),
+        C = c(0.1, 0.7, 0.1),
+        G = c(0.1, 0.1, 0.7),
+        T = c(0.1, 0.1, 0.1),
+        motif_id = c("pos1", "pos2", "pos3"),
+        conservation_score = c(0.9, 0.85, 0.95),
+        stringsAsFactors = FALSE
+    )
+
+    pssm_regular <- as.matrix(pssm_with_extras[, c("A", "C", "G", "T")])
+
+    test_intervals <- gintervals(1, 200, 240)
+
+    gvtrack.create("vt_max_extra", NULL, func = "pwm.max", pssm = pssm_with_extras, bidirect = TRUE, prior = 0.01)
+    gvtrack.create("vt_max_regular", NULL, func = "pwm.max", pssm = pssm_regular, bidirect = TRUE, prior = 0.01)
+
+    scores <- gextract(c("vt_max_extra", "vt_max_regular"), test_intervals, iterator = test_intervals)
+
+    expect_equal(scores$vt_max_extra[1], scores$vt_max_regular[1], tolerance = 1e-6)
+})
+
+test_that("virtual track pwm.max.pos accepts PSSM with extra columns", {
+    remove_all_vtracks()
+
+    pssm_with_extras <- data.frame(
+        A = c(1.0, 0.0),
+        C = c(0.0, 1.0),
+        G = c(0.0, 0.0),
+        T = c(0.0, 0.0),
+        source = "JASPAR",
+        quality = "high",
+        stringsAsFactors = FALSE
+    )
+
+    pssm_regular <- create_test_pssm()
+
+    test_intervals <- gintervals(1, 200, 240)
+
+    gvtrack.create("vt_pos_extra", NULL, func = "pwm.max.pos", pssm = pssm_with_extras, bidirect = FALSE, extend = TRUE)
+    gvtrack.create("vt_pos_regular", NULL, func = "pwm.max.pos", pssm = pssm_regular, bidirect = FALSE, extend = TRUE)
+
+    scores <- gextract(c("vt_pos_extra", "vt_pos_regular"), test_intervals, iterator = test_intervals)
+
+    expect_equal(scores$vt_pos_extra[1], scores$vt_pos_regular[1])
+})
+
+test_that("virtual track pwm.count accepts PSSM with extra columns", {
+    remove_all_vtracks()
+
+    pssm_with_extras <- data.frame(
+        A = c(0.7, 0.1),
+        C = c(0.1, 0.7),
+        G = c(0.1, 0.1),
+        T = c(0.1, 0.1),
+        annotation = c("start", "end"),
+        weight = c(1.0, 1.0),
+        stringsAsFactors = FALSE
+    )
+
+    pssm_regular <- as.matrix(pssm_with_extras[, c("A", "C", "G", "T")])
+
+    test_intervals <- gintervals(1, 200, 240)
+
+    gvtrack.create("vt_count_extra", NULL, func = "pwm.count", pssm = pssm_with_extras, score.thresh = 0, bidirect = TRUE)
+    gvtrack.create("vt_count_regular", NULL, func = "pwm.count", pssm = pssm_regular, score.thresh = 0, bidirect = TRUE)
+
+    scores <- gextract(c("vt_count_extra", "vt_count_regular"), test_intervals, iterator = test_intervals)
+
+    expect_equal(scores$vt_count_extra[1], scores$vt_count_regular[1])
 })

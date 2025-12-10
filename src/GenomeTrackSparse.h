@@ -9,7 +9,9 @@
 #define GENOMETRACKSPARSE_H_
 
 #include <cmath>
+#include <limits>
 #include <vector>
+#include <string>
 
 #include "GenomeTrack1D.h"
 #include "GIntervals.h"
@@ -21,6 +23,8 @@ public:
 	GenomeTrackSparse();
 
 	virtual void read_interval(const GInterval &interval);
+	virtual double last_max_pos() const;
+	virtual double last_min_pos() const;
 
 	void init_read(const char *filename, int chromid);
 	void init_write(const char *filename, int chromid);
@@ -38,10 +42,22 @@ protected:
 	bool          m_loaded;
 	int64_t       m_num_records;
 	GIntervals::const_iterator m_icur_interval;
+	double        m_last_min_pos;
+
+	// State for indexed "smart handle"
+	std::string m_dat_path;
+	std::string m_dat_mode;
+	bool        m_dat_open{false};
 
 	void read_file_into_mem();
 	void calc_vals(const GInterval &interval);
 	bool check_first_overlap(const GIntervals::const_iterator &iinterval1, const GInterval &interval2);
+
+	// Helper to parse header at current file position
+	void read_header_at_current_pos_(BufferedFile &bf);
+
+	// On-disk record size constant (matches RECORD_SIZE)
+	static constexpr size_t kSparseRecBytes = sizeof(int64_t) * 2 + sizeof(float);
 };
 
 
@@ -58,9 +74,21 @@ inline void GenomeTrackSparse::calc_vals(const GInterval &interval)
 	double mean_square_sum = 0;
 	float v;
 
+	// For sampling, collect all values/positions
+	vector<float> all_values;
+	vector<double> all_positions;
+	if (m_functions[SAMPLE] || m_functions[SAMPLE_POS])
+		all_values.reserve(100);
+	if (m_functions[SAMPLE_POS])
+		all_positions.reserve(100);
+
 	m_last_sum = 0;
 	m_last_min = numeric_limits<float>::max();
 	m_last_max = -numeric_limits<float>::max();
+	if (m_functions[MAX_POS])
+		m_last_max_pos = numeric_limits<double>::quiet_NaN();
+	if (m_functions[MIN_POS])
+		m_last_min_pos = numeric_limits<double>::quiet_NaN();
 
 	for (GIntervals::const_iterator iinterv = m_icur_interval; iinterv != m_intervals.end(); ++iinterv) {
 		if (!iinterv->do_overlap(interval))
@@ -69,8 +97,19 @@ inline void GenomeTrackSparse::calc_vals(const GInterval &interval)
 		v = m_vals[iinterv - m_intervals.begin()];
 		if (!std::isnan(v)) {
 			m_last_sum += v;
-			m_last_min = min(m_last_min, v);
-			m_last_max = max(m_last_max, v);
+			if (v < m_last_min) {
+				m_last_min = v;
+				if (m_functions[MIN_POS])
+					m_last_min_pos = iinterv->start;
+			} else if (m_functions[MIN_POS] && v == m_last_min) {
+				if (std::isnan(m_last_min_pos) || iinterv->start < m_last_min_pos)
+					m_last_min_pos = iinterv->start;
+			}
+			if (v > m_last_max) {
+				m_last_max = v;
+				if (m_functions[MAX_POS])
+					m_last_max_pos = iinterv->start;
+			}
 
 			if (m_functions[STDDEV])
 				mean_square_sum += v * v;
@@ -78,14 +117,53 @@ inline void GenomeTrackSparse::calc_vals(const GInterval &interval)
 			if (m_use_quantile)
 				m_sp.add(v, s_rnd_func);
 
+			// New virtual track computations
+			if (m_functions[EXISTS])
+				m_last_exists = 1;
+
+			if (m_functions[FIRST] && std::isnan(m_last_first))
+				m_last_first = v;
+
+			if (m_functions[FIRST_POS] && std::isnan(m_last_first_pos))
+				m_last_first_pos = iinterv->start;
+
+			if (m_functions[LAST])
+				m_last_last = v;
+
+			if (m_functions[LAST_POS])
+				m_last_last_pos = iinterv->start;
+
+			if (m_functions[SAMPLE])
+				all_values.push_back(v);
+			if (m_functions[SAMPLE_POS])
+				all_positions.push_back(iinterv->start);
+
 			++num_vs;
 		}
 	}
 
+	// Finalize size
+	if (m_functions[SIZE])
+		m_last_size = num_vs;
+
+	// Sample from collected values
+	if (m_functions[SAMPLE] && !all_values.empty()) {
+		int idx = (int)(s_rnd_func() * all_values.size());
+		m_last_sample = all_values[idx];
+	}
+
+	if (m_functions[SAMPLE_POS] && !all_positions.empty()) {
+		int idx = (int)(s_rnd_func() * all_positions.size());
+		m_last_sample_pos = all_positions[idx];
+	}
+
 	if (num_vs > 0)
 		m_last_avg = m_last_nearest = m_last_sum / num_vs;
-	else
+	else {
 		m_last_avg = m_last_nearest = m_last_min = m_last_max = m_last_sum = numeric_limits<float>::quiet_NaN();
+		if (m_functions[MIN_POS])
+			m_last_min_pos = numeric_limits<double>::quiet_NaN();
+	}
 
 	// we are calaculating unbiased standard deviation:
 	// sqrt(sum((x-mean)^2) / (N-1)) = sqrt(sum(x^2)/(N-1) - N*(mean^2)/(N-1))

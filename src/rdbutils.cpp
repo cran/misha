@@ -326,8 +326,21 @@ pid_t RdbInitializer::launch_process()
 		s_is_kid = true;
 
 		sigaction(SIGINT, &s_old_sigint_act, NULL);
-		sigaction(SIGCHLD, &s_old_sigchld_act, NULL);		
-		
+		sigaction(SIGCHLD, &s_old_sigchld_act, NULL);
+
+		// Reset error option to NULL in child process to prevent issues with
+		// error handlers like recover/dump.frames that don't work with redirected stdio
+		{
+			ParseStatus status;
+			SEXP expr = PROTECT(Rf_mkString("options(error = NULL)"));
+			SEXP parsed = PROTECT(R_ParseVector(expr, 1, &status, R_NilValue));
+			if (status == PARSE_OK && Rf_length(parsed) > 0) {
+				int err;
+				R_tryEval(VECTOR_ELT(parsed, 0), R_GlobalEnv, &err);
+			}
+			UNPROTECT(2);
+		}
+
         SEXP r_multitasking_stdout = Rf_GetOption1(Rf_install("gmultitasking_stdout"));
 
 		int devnull;
@@ -375,7 +388,23 @@ void RdbInitializer::check_kids_state(bool ignore_errors)
                 s_running_pids.pop_back();
 
                 if (!ignore_errors && !WIFEXITED(status) && WIFSIGNALED(status) && WTERMSIG(status) != MISHA_EXIT_SIG){
-                    verror("Child process %d ended unexpectedly", (int)ipid->pid);
+                    // Check if the child wrote an error message to shared memory
+                    char error_msg_copy[1000];
+                    bool has_error_msg = false;
+                    {
+                        SemLocker sl(s_shm_sem);
+                        if (s_shm->error_msg[0]) {
+                            strncpy(error_msg_copy, s_shm->error_msg, sizeof(error_msg_copy) - 1);
+                            error_msg_copy[sizeof(error_msg_copy) - 1] = '\0';
+                            has_error_msg = true;
+                        }
+                    }
+                    // Call verror AFTER releasing the semaphore to avoid deadlock
+                    if (has_error_msg) {
+                        verror("%s", error_msg_copy);
+                    } else {
+                        verror("Child process %d ended unexpectedly", (int)ipid->pid);
+                    }
 				}
 
                 // choose a new untouchable kid: the one with maximal memory consumption
@@ -733,6 +762,17 @@ void rdb::runprotect_all()
 
 void rdb::get_chrom_files(const char *dirname, vector<string> &chrom_files)
 {
+	// Check for indexed format first
+	string idx_path = string(dirname) + "/track.idx";
+	struct stat idx_st;
+
+	if (stat(idx_path.c_str(), &idx_st) == 0) {
+		// Indexed format exists - return empty list
+		// The scanner will need to handle this case differently
+		return;
+	}
+
+	// Per-chromosome format - scan directory for per-chromosome files
 	DIR *dir = opendir(dirname);
 
 	if (!dir)
@@ -741,18 +781,27 @@ void rdb::get_chrom_files(const char *dirname, vector<string> &chrom_files)
 	struct dirent *dirp;
 
 	while ((dirp = readdir(dir))) {
-		if (!strncmp(dirp->d_name, CHROM_FILE_PREFIX, CHROM_FILE_PREFIX_LEN)) {
-            if (dirp->d_type == DT_REG)
-                chrom_files.push_back(dirp->d_name);
-            else if (dirp->d_type == DT_UNKNOWN) {
-                struct stat sbuf;
-                char filename[PATH_MAX];
+		if (!strcmp(dirp->d_name, ".") || !strcmp(dirp->d_name, ".."))
+			continue;
+		if (dirp->d_name[0] == '.')
+			continue;
 
-                snprintf(filename, sizeof(filename), "%s/%s", dirname, dirp->d_name);
-                if (!stat(filename, &sbuf) && S_ISREG(sbuf.st_mode))
-                    chrom_files.push_back(dirp->d_name);
-            }
-        }
+		// Skip indexed format files (shouldn't exist if we got here, but just in case)
+		if (!strcmp(dirp->d_name, "track.dat") || !strcmp(dirp->d_name, "track.idx"))
+			continue;
+		if (!strcmp(dirp->d_name, "track.dat.tmp") || !strcmp(dirp->d_name, "track.idx.tmp"))
+			continue;
+
+		if (dirp->d_type == DT_REG)
+			chrom_files.push_back(dirp->d_name);
+		else if (dirp->d_type == DT_UNKNOWN) {
+			struct stat sbuf;
+			char filename[PATH_MAX];
+
+			snprintf(filename, sizeof(filename), "%s/%s", dirname, dirp->d_name);
+			if (!stat(filename, &sbuf) && S_ISREG(sbuf.st_mode))
+				chrom_files.push_back(dirp->d_name);
+		}
 	}
 
 	closedir(dir);
@@ -844,7 +893,15 @@ SEXP rdb::eval_in_R(SEXP parsed_command, SEXP envir)
 
 		if (!check_error && TYPEOF(err_msg) == STRSXP && LENGTH(err_msg) > 0)
 		{
-			verror(CHAR(STRING_ELT(err_msg, 0)));
+			const char *error_msg = CHAR(STRING_ELT(err_msg, 0));
+			// Strip "Error: " or "Error : " prefix from geterrmessage() to avoid double "Error:" in output
+			if (strncmp(error_msg, "Error : ", 8) == 0)
+				error_msg += 8;
+			else if (strncmp(error_msg, "Error: ", 7) == 0)
+				error_msg += 7;
+			else if (strncmp(error_msg, "Error ", 6) == 0)
+				error_msg += 6;
+			verror(error_msg);
 		}
 		else
 		{
@@ -997,3 +1054,18 @@ SEXP rdb::get_rvector_col(SEXP v, const char *colname, const char *varname, bool
 	return R_NilValue;
 }
 
+
+// Helper function to check if database is in indexed format
+bool rdb::is_db_indexed(SEXP _envir) {
+	const char *groot = get_groot(_envir);
+	if (!groot || !*groot) {
+		return false;
+	}
+
+	string seq_dir = string(groot) + "/seq";
+	string idx_path = seq_dir + "/genome.idx";
+	string seq_path = seq_dir + "/genome.seq";
+
+	struct stat st;
+	return (stat(idx_path.c_str(), &st) == 0 && stat(seq_path.c_str(), &st) == 0);
+}

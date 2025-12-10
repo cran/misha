@@ -50,22 +50,33 @@ hg38/              <- Genomic Database root directory
       mypssm.data        <- ...
       mypssm.key         <- ...
    seq/               <- (optional)
-      chr1.seq           <- seq (sequence) files
+      genome.seq         <- indexed format: single sequence file
+      genome.idx         <- indexed format: index file
+      OR
+      chr1.seq           <- per-chromosome format: separate files
       chr2.seq           <- ...
       chr3.seq           <- ...
    tracks/
       tss.interv         <- small intervals set = tss
-      big_data.interv/   <- big intervals set = big_data
+      big_data.interv/   <- big intervals set = big_data (per-chromosome format)
          .meta              <- summary of the intervals set
          chr1               <- chrom files
          chr5               <- ...
-      rpt.track/         <- track = rpt
+      indexed_intervals.interv/  <- big intervals set (indexed format)
+         intervals.dat      <- consolidated interval data
+         intervals.idx      <- index file
+      rpt.track/         <- track = rpt (per-chromosome format)
          .attributes        <- track attributes (optional)
          chr1               <- chrom files
          chr2               <- ...
          chr3               <- ...
          vars/              <- track variables (optional)
              myresult           <- track variable
+      indexed_track.track/   <- track (indexed format)
+         track.dat          <- consolidated track data
+         track.idx          <- index file
+         .attributes        <- track attributes (optional)
+         vars/              <- track variables (optional)
       test/
          intervals1.interv  <- intervals = test.intervals1
          track1.track/      <- track = test.track1
@@ -95,15 +106,105 @@ Y    57772954
 ```
 
 
-### Seq File
+### Seq Files
 
-*Seq* (aka sequence) files are located in `seq` directory. Each of the Seq files contains a genomic sequence for a given chromosome as a contiguous string of ASCII characters. The length of the string should match the length of the chromosome. The file must be called `chrXXX.seq` where `XXX` indicates the name of the chromosome as it appears in `chrom_sizes.txt` file.
+Genomic sequences are stored in the `seq` directory. Two formats are supported:
 
-Here is an example of an unusually short (25 base pairs) Seq file:
+#### Indexed Format (Recommended)
+
+The indexed format uses two files:
+- `genome.seq`: Single binary file containing concatenated sequences for all contigs
+- `genome.idx`: Binary index mapping contig names to positions in genome.seq
+
+This format provides better performance and scalability, especially for genomes with many contigs. It is the default format created by `gdb.create()`.
+
+**Format Specifications:**
+
+The `genome.idx` file has the following structure:
+- **Header (24 bytes)**:
+  - Magic number: `"MISHAIDX"` (8 bytes)
+  - Index version: `uint32_t` (4 bytes, currently 1)
+  - Number of contigs: `uint32_t` (4 bytes)
+  - CRC64-ECMA checksum: `uint64_t` (8 bytes)
+
+- **Entries** (one per contig):
+  - Chromosome ID: `uint32_t` (4 bytes) - alphabetical rank (0, 1, 2, ...)
+  - Name length: `uint16_t` (2 bytes)
+  - Name: UTF-8 string (not null-terminated)
+  - Offset in genome.seq: `uint64_t` (8 bytes)
+  - Sequence length: `uint64_t` (8 bytes)
+  - Reserved: `uint64_t` (8 bytes, currently zeros)
+
+All multi-byte integers are stored in little-endian byte order.
+
+#### Per-Chromosome Format
+
+Each contig has a separate `.seq` file containing its genomic sequence as a contiguous string of ASCII characters. Files are named `chrXXX.seq` where `XXX` is the contig name from `chrom_sizes.txt`.
+
+Example of a short (25 base pairs) Seq file:
 
 ```csv
 ggtgaAGccctggagattcttatta
 ```
+
+To create a database in the per-chromosome format, use `gdb.create(..., format = "per-chromosome")`.
+
+### Track Files
+
+Tracks can be stored in two different formats: **per-chromosome format** or **indexed format**.
+
+#### Per-Chromosome Format
+
+In the traditional per-chromosome format, each chromosome's track data is stored in a separate file within a track directory (e.g., `tracks/mytrack.track/chr1`, `tracks/mytrack.track/chr2`, etc.). This format works well for genomes with a small number of chromosomes.
+
+#### Indexed Format (Recommended for Multi-Contig Genomes)
+
+The indexed format consolidates all chromosome data into two files:
+- `track.dat`: Single binary file containing concatenated track data for all chromosomes
+- `track.idx`: Binary index mapping chromosome IDs to positions in track.dat
+
+This format dramatically reduces file descriptor usage for genomes with many contigs (e.g., draft assemblies with thousands of scaffolds) and improves performance for parallel access.
+
+**Format Specifications:**
+
+The `track.idx` file has the following structure:
+- **Header (36 bytes)**:
+  - Magic number: `"MISHATDX"` (8 bytes)
+  - Index version: `uint32_t` (4 bytes, currently 1)
+  - Track type: `uint32_t` (4 bytes) - 0=dense, 1=sparse, 2=array
+  - Number of contigs: `uint32_t` (4 bytes)
+  - Flags: `uint64_t` (8 bytes) - bit 0 indicates little-endian
+  - CRC64-ECMA checksum: `uint64_t` (8 bytes)
+
+- **Entries** (24 bytes per contig):
+  - Chromosome ID: `uint32_t` (4 bytes)
+  - Offset in track.dat: `uint64_t` (8 bytes)
+  - Data length: `uint64_t` (8 bytes)
+  - Reserved: `uint32_t` (4 bytes, for future use)
+
+All multi-byte integers are stored in little-endian byte order.
+
+**Converting to Indexed Format:**
+
+Existing per-chromosome tracks can be converted to indexed format using `gtrack.convert_to_indexed()`:
+
+```{r, eval=FALSE}
+# Convert a track to indexed format
+gtrack.convert_to_indexed("my_track")
+
+# Check track format
+info <- gtrack.info("my_track")
+print(info$format) # "indexed" or "per-chromosome"
+```
+
+**Supported Track Types:** Dense (fixed-bin), Sparse, and Array tracks (1D only) can use indexed format. 2D tracks and virtual tracks are not supported for indexed format.
+
+**Backward Compatibility:** The indexed format is fully transparent to all misha functions. Both formats can coexist in the same database and are used identically in track expressions and analysis functions.
+
+**Validation Limits:** To prevent issues with corrupted or malicious index files, the following limits are enforced:
+
+- **Maximum contigs per index**: 20,000,000 (applies to genome.idx, track.idx, intervals.idx)
+- **Maximum contig name length**: 1,024 bytes
 
 
 ### PSSM Set
@@ -179,6 +280,72 @@ Interval sets can be saved in the Genomic Database. Use the `gintervals.save` an
 Internally, interval sets can be stored in two different formats: **small interval set** or **big interval set**. The specific format is chosen depending on the size of the interval set. Big format is selected for interval sets that contain more than `gbig.intervals.size` intervals (`gbig.intervals.size` is set via `options`), while smaller sets are stored in the small format. Use `gintervals.is.bigset` to determine the format of the stored interval set.
 
 Saved interval sets in the small format can be seamlessly used in all functions and track expressions without the need to explicitly load them.
+
+#### Interval Set Storage Formats
+
+Big interval sets can be stored in two formats: **per-chromosome format** or **indexed format**.
+
+**Per-Chromosome Format:**
+In this traditional format, intervals for each chromosome (or chromosome pair for 2D intervals) are stored in separate files within an interval set directory. For 1D intervals: `myintervals.interv/chr1`, `chr2`, etc. For 2D intervals: `myintervals.interv/chr1-chr2`, `chr1-chr3`, etc.
+
+**Indexed Format (Recommended for Multi-Contig Genomes):**
+The indexed format consolidates all chromosomes into two files, dramatically reducing file descriptor usage for genomes with many contigs.
+
+**1D Intervals** use:
+- `intervals.dat`: Binary file with concatenated interval data
+- `intervals.idx`: Binary index file (36-byte header + 24 bytes per contig)
+
+The `intervals.idx` file structure:
+- **Header (36 bytes)**:
+  - Magic: `"MISHAI1D"` (8 bytes)
+  - Version: `uint32_t` (4 bytes)
+  - Number of entries: `uint32_t` (4 bytes)
+  - Flags: `uint64_t` (8 bytes) - bit 0 indicates little-endian
+  - CRC64-ECMA checksum: `uint64_t` (8 bytes)
+  - Reserved: `uint32_t` (4 bytes)
+
+- **Entries** (24 bytes per contig):
+  - Chromosome ID: `uint32_t` (4 bytes)
+  - Offset: `uint64_t` (8 bytes)
+  - Length: `uint64_t` (8 bytes)
+  - Reserved: `uint32_t` (4 bytes)
+
+**2D Intervals** use:
+- `intervals2d.dat`: Binary file with concatenated pair data
+- `intervals2d.idx`: Binary index file (40-byte header + 28 bytes per pair)
+
+The `intervals2d.idx` file structure:
+- **Header (40 bytes)**:
+  - Magic: `"MISHAI2D"` (8 bytes)
+  - Version: `uint32_t` (4 bytes)
+  - Number of entries: `uint32_t` (4 bytes)
+  - Flags: `uint64_t` (8 bytes)
+  - CRC64-ECMA checksum: `uint64_t` (8 bytes)
+  - Reserved: `uint64_t` (8 bytes)
+
+- **Entries** (28 bytes per pair):
+  - Chromosome 1 ID: `uint32_t` (4 bytes)
+  - Chromosome 2 ID: `uint32_t` (4 bytes)
+  - Offset: `uint64_t` (8 bytes)
+  - Length: `uint64_t` (8 bytes)
+  - Reserved: `uint32_t` (4 bytes)
+
+**Note:** Only non-empty chromosome pairs are stored in the 2D index, avoiding O(N²) space overhead.
+
+**Converting to Indexed Format:**
+
+```{r, eval=FALSE}
+# Convert 1D interval set to indexed format
+gintervals.convert_to_indexed("my_intervals")
+
+# Convert 2D interval set to indexed format
+gintervals.2d.convert_to_indexed("my_2d_intervals")
+
+# Convert and remove old per-chromosome files
+gintervals.convert_to_indexed("my_intervals", remove.old = TRUE)
+```
+
+All multi-byte integers are stored in little-endian byte order. The indexed format is fully backward compatible with all misha functions.
 
 ```{r, eval=FALSE}
 # 'annotations' is an intervals set saved in Genomic Database
@@ -311,7 +478,7 @@ See the table below:
 
 So far we showed that the value of a `mytrack` variable is set to be the average (or weighted average) of the track values that are covered by the iterator interval. But what if we do not want to average the values but rather pick up the maximal or minimal values? What if we want to use the percentile of a track value rather than the value itself? And maybe we even want to alter the iterator interval itself on the fly? This is where virtual tracks become useful.
 
-Virtual track is a set of rules that describe how the "source" (a real track or intervals) should be proceeded, and how the iterator interval should be modified. Virtual tracks are created with `gvtrack.create` function:
+Virtual track is a set of rules that describe how the "source" (a real track, intervals, or a value-based track) should be proceeded, and how the iterator interval should be modified. Virtual tracks are created with `gvtrack.create` function:
 
 ```{r, eval=FALSE}
 gvtrack.create("myvtrack", "dense_track")
@@ -362,6 +529,30 @@ gextract("myvtrack", .misha$ALLGENOME, iterator = intervs)
 ```
 
 In this example `myvtrack` returns the minimal distance between intervals from an interval set `annotations` and the center of the current iterator interval from `intervs`.
+
+#### Value-Based Tracks
+
+In addition to using database tracks and interval sets as sources, virtual tracks can also use **value-based tracks** as sources. Value-based tracks are data frames containing genomic intervals with associated numeric values. They function as in-memory sparse tracks without requiring track creation in the database.
+
+To create a value-based virtual track, provide a data frame with columns `chrom`, `start`, `end`, and one numeric value column (any column name is acceptable):
+
+```{r, eval=FALSE}
+# Create a data frame with intervals and numeric values
+intervals_with_values <- data.frame(
+    chrom = "chr1",
+    start = c(100, 300, 500),
+    end = c(200, 400, 600),
+    score = c(10, 20, 30)
+)
+
+# Use as value-based sparse track
+gvtrack.create("myvtrack", intervals_with_values, "avg")
+gvtrack.create("myvtrack_max", intervals_with_values, "max")
+```
+
+Value-based tracks support all track-based summarizer functions (e.g., `avg`, `min`, `max`, `sum`, `stddev`, `quantile`, `nearest`, `exists`, `size`, `first`, `last`, `sample`, and position functions). However, they have one important restriction: **intervals must not overlap**. Unlike interval-based summarizers (which work with overlapping intervals), value-based tracks behave like sparse tracks and require non-overlapping intervals.
+
+Value-based tracks aggregate values using count-based averaging (each interval contributes equally regardless of length), matching the behavior of sparse tracks. This means when multiple intervals are covered by an iterator interval, each interval's value contributes equally to the aggregation, regardless of the interval's length.
 
 For a full list of supported functions please see `gvtrack.create` and `gvtrack.array.slice` functions.
 
@@ -499,6 +690,46 @@ r3 <- gsample("dense_track", 10) # r3 == r1
 ### Controlling the Number of Processes
 
 To boost the run time performance various functions in the library support multitasking mode, i.e. parallel computation of the result by several concurrent processes. The exact number of processes internally launched depends on the specific call however the upper bound can be controlled by a few parameters such as `gmax.processes` (absolute upper bound), `gmax.processes2core` (maximal number of processes per CPU core) and `gmin.scope4process` (minimal scope range / surface assigned to a process). Multitasking can also be completely switched off by setting `gmultitasking` parameter to `FALSE`.
+
+### Auto-Configuration
+
+The `misha` package automatically configures itself based on your system's resources when loaded. This happens transparently without any user intervention:
+
+**Automatic Process Limits:**
+The package detects the number of CPU cores and sets `gmax.processes = 70% of cores`. This ensures optimal parallelism while leaving headroom for the system. For example:
+- On a 4-core laptop: `gmax.processes = 2` (70% of 4)
+- On a 16-core workstation: `gmax.processes = 11` (70% of 16)
+- On a 128-core server: `gmax.processes = 89` (70% of 128)
+
+**Automatic Buffer Size:**
+The package coordinates buffer size with process limits to ensure `gmax.processes * gmax.data.size <= 70% of RAM`. Specifically, it sets `gmax.data.size = min((RAM * 0.7) / gmax.processes, 10GB)`. This ensures that when all processes are running at full capacity, total memory usage stays within safe limits. For example:
+- On a 4-core, 8GB laptop: `gmax.processes = 2`, `gmax.data.size = 2.8GB` (total: 5.6GB = 70% of 8GB)
+- On a 16-core, 32GB workstation: `gmax.processes = 11`, `gmax.data.size = 2.0GB` (total: 22.4GB = 70% of 32GB)
+- On a 128-core, 256GB server: `gmax.processes = 89`, `gmax.data.size = 2.0GB` (total: 179.2GB = 70% of 256GB)
+
+The 10GB cap is empirically determined - larger shared memory allocations can fail even when system limits appear to allow them. This cap is rarely hit on multi-core systems due to the per-process division.
+
+**Automatic Small Dataset Detection:**
+The package automatically detects small datasets and uses single-threaded mode to avoid fork overhead. The threshold scales with your system: `threshold = gmax.processes * 1000 records`. For example:
+- 4-core laptop (2 procs): single-threaded below 2K records
+- 16-core workstation (11 procs): single-threaded below 11K records
+- 128-core server (89 procs): single-threaded below 89K records
+
+This dynamic threshold ensures fork overhead stays below 10% of runtime. For larger datasets, multitasking is automatically enabled when beneficial.
+
+**Manual Override:**
+You can still manually set these options if needed:
+```r
+options(gmax.processes = 32)        # Override process limit
+options(gmax.data.size = 5e9)       # Override buffer size (5GB)
+options(gmultitasking = FALSE)      # Disable multitasking entirely
+```
+
+To check current auto-configured values:
+```r
+getOption("gmax.processes")         # Current process limit
+getOption("gmax.data.size") / 1e9   # Current buffer size in GB
+```
 
 ### Limiting the Memory Consumption
 

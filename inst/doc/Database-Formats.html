@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta charset="utf-8" />
+<meta name="generator" content="pandoc" />
+<meta http-equiv="X-UA-Compatible" content="IE=EDGE" />
+
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+
+
+<title>Database Formats and Multi-Contig Support</title>
+
+<script>// Pandoc 2.9 adds attributes on both header and div. We remove the former (to
+// be compatible with the behavior of Pandoc < 2.8).
+document.addEventListener('DOMContentLoaded', function(e) {
+  var hs = document.querySelectorAll("div.section[class*='level'] > :first-child");
+  var i, h, a;
+  for (i = 0; i < hs.length; i++) {
+    h = hs[i];
+    if (!/^h[1-6]$/i.test(h.tagName)) continue;  // it should be a header h1-h6
+    a = h.attributes;
+    while (a.length > 0) h.removeAttribute(a[0].name);
+  }
+});
+</script>
+
+<style type="text/css">
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+span.underline{text-decoration: underline;}
+div.column{display: inline-block; vertical-align: top; width: 50%;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+</style>
+
+
+
+<style type="text/css">
+code {
+white-space: pre;
+}
+.sourceCode {
+overflow: visible;
+}
+</style>
+<style type="text/css" data-origin="pandoc">
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { display: inline-block; text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+{ counter-reset: source-line 0; }
+pre.numberSource code > span
+{ position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+{ content: counter(source-line);
+position: relative; left: -1em; text-align: right; vertical-align: baseline;
+border: none; display: inline-block;
+-webkit-touch-callout: none; -webkit-user-select: none;
+-khtml-user-select: none; -moz-user-select: none;
+-ms-user-select: none; user-select: none;
+padding: 0 4px; width: 4em;
+color: #aaaaaa;
+}
+pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa; padding-left: 4px; }
+div.sourceCode
+{ }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+code span.al { color: #ff0000; font-weight: bold; } 
+code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.at { color: #7d9029; } 
+code span.bn { color: #40a070; } 
+code span.bu { color: #008000; } 
+code span.cf { color: #007020; font-weight: bold; } 
+code span.ch { color: #4070a0; } 
+code span.cn { color: #880000; } 
+code span.co { color: #60a0b0; font-style: italic; } 
+code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.do { color: #ba2121; font-style: italic; } 
+code span.dt { color: #902000; } 
+code span.dv { color: #40a070; } 
+code span.er { color: #ff0000; font-weight: bold; } 
+code span.ex { } 
+code span.fl { color: #40a070; } 
+code span.fu { color: #06287e; } 
+code span.im { color: #008000; font-weight: bold; } 
+code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.kw { color: #007020; font-weight: bold; } 
+code span.op { color: #666666; } 
+code span.ot { color: #007020; } 
+code span.pp { color: #bc7a00; } 
+code span.sc { color: #4070a0; } 
+code span.ss { color: #bb6688; } 
+code span.st { color: #4070a0; } 
+code span.va { color: #19177c; } 
+code span.vs { color: #4070a0; } 
+code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } 
+</style>
+<script>
+// apply pandoc div.sourceCode style to pre.sourceCode instead
+(function() {
+  var sheets = document.styleSheets;
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].ownerNode.dataset["origin"] !== "pandoc") continue;
+    try { var rules = sheets[i].cssRules; } catch (e) { continue; }
+    var j = 0;
+    while (j < rules.length) {
+      var rule = rules[j];
+      // check if there is a div.sourceCode rule
+      if (rule.type !== rule.STYLE_RULE || rule.selectorText !== "div.sourceCode") {
+        j++;
+        continue;
+      }
+      var style = rule.style.cssText;
+      // check if color or background-color is set
+      if (rule.style.color === '' && rule.style.backgroundColor === '') {
+        j++;
+        continue;
+      }
+      // replace div.sourceCode by a pre.sourceCode rule
+      sheets[i].deleteRule(j);
+      sheets[i].insertRule('pre.sourceCode{' + style + '}', j);
+    }
+  }
+})();
+</script>
+
+
+
+
+<style type="text/css">body {
+background-color: #fff;
+margin: 1em auto;
+max-width: 700px;
+overflow: visible;
+padding-left: 2em;
+padding-right: 2em;
+font-family: "Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+font-size: 14px;
+line-height: 1.35;
+}
+#TOC {
+clear: both;
+margin: 0 0 10px 10px;
+padding: 4px;
+width: 400px;
+border: 1px solid #CCCCCC;
+border-radius: 5px;
+background-color: #f6f6f6;
+font-size: 13px;
+line-height: 1.3;
+}
+#TOC .toctitle {
+font-weight: bold;
+font-size: 15px;
+margin-left: 5px;
+}
+#TOC ul {
+padding-left: 40px;
+margin-left: -1.5em;
+margin-top: 5px;
+margin-bottom: 5px;
+}
+#TOC ul ul {
+margin-left: -2em;
+}
+#TOC li {
+line-height: 16px;
+}
+table {
+margin: 1em auto;
+border-width: 1px;
+border-color: #DDDDDD;
+border-style: outset;
+border-collapse: collapse;
+}
+table th {
+border-width: 2px;
+padding: 5px;
+border-style: inset;
+}
+table td {
+border-width: 1px;
+border-style: inset;
+line-height: 18px;
+padding: 5px 5px;
+}
+table, table th, table td {
+border-left-style: none;
+border-right-style: none;
+}
+table thead, table tr.even {
+background-color: #f7f7f7;
+}
+p {
+margin: 0.5em 0;
+}
+blockquote {
+background-color: #f6f6f6;
+padding: 0.25em 0.75em;
+}
+hr {
+border-style: solid;
+border: none;
+border-top: 1px solid #777;
+margin: 28px 0;
+}
+dl {
+margin-left: 0;
+}
+dl dd {
+margin-bottom: 13px;
+margin-left: 13px;
+}
+dl dt {
+font-weight: bold;
+}
+ul {
+margin-top: 0;
+}
+ul li {
+list-style: circle outside;
+}
+ul ul {
+margin-bottom: 0;
+}
+pre, code {
+background-color: #f7f7f7;
+border-radius: 3px;
+color: #333;
+white-space: pre-wrap; 
+}
+pre {
+border-radius: 3px;
+margin: 5px 0px 10px 0px;
+padding: 10px;
+}
+pre:not([class]) {
+background-color: #f7f7f7;
+}
+code {
+font-family: Consolas, Monaco, 'Courier New', monospace;
+font-size: 85%;
+}
+p > code, li > code {
+padding: 2px 0px;
+}
+div.figure {
+text-align: center;
+}
+img {
+background-color: #FFFFFF;
+padding: 2px;
+border: 1px solid #DDDDDD;
+border-radius: 3px;
+border: 1px solid #CCCCCC;
+margin: 0 5px;
+}
+h1 {
+margin-top: 0;
+font-size: 35px;
+line-height: 40px;
+}
+h2 {
+border-bottom: 4px solid #f7f7f7;
+padding-top: 10px;
+padding-bottom: 2px;
+font-size: 145%;
+}
+h3 {
+border-bottom: 2px solid #f7f7f7;
+padding-top: 10px;
+font-size: 120%;
+}
+h4 {
+border-bottom: 1px solid #f7f7f7;
+margin-left: 8px;
+font-size: 105%;
+}
+h5, h6 {
+border-bottom: 1px solid #ccc;
+font-size: 105%;
+}
+a {
+color: #0033dd;
+text-decoration: none;
+}
+a:hover {
+color: #6666ff; }
+a:visited {
+color: #800080; }
+a:visited:hover {
+color: #BB00BB; }
+a[href^="http:"] {
+text-decoration: underline; }
+a[href^="https:"] {
+text-decoration: underline; }
+
+code > span.kw { color: #555; font-weight: bold; } 
+code > span.dt { color: #902000; } 
+code > span.dv { color: #40a070; } 
+code > span.bn { color: #d14; } 
+code > span.fl { color: #d14; } 
+code > span.ch { color: #d14; } 
+code > span.st { color: #d14; } 
+code > span.co { color: #888888; font-style: italic; } 
+code > span.ot { color: #007020; } 
+code > span.al { color: #ff0000; font-weight: bold; } 
+code > span.fu { color: #900; font-weight: bold; } 
+code > span.er { color: #a61717; background-color: #e3d2d2; } 
+</style>
+
+
+
+
+</head>
+
+<body>
+
+
+
+
+<h1 class="title toc-ignore">Database Formats and Multi-Contig
+Support</h1>
+
+
+
+<div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a><span class="fu">library</span>(misha)</span></code></pre></div>
+<div id="overview" class="section level1">
+<h1>Overview</h1>
+<p>Starting with misha 5.3.0, databases can be stored in two
+formats:</p>
+<ul>
+<li><strong>Indexed format</strong> (default, recommended): Single
+unified files for sequences and tracks</li>
+<li><strong>Per-chromosome format</strong> (legacy): Separate files for
+each chromosome</li>
+</ul>
+<p>The indexed format provides better performance and scalability,
+especially for genomes with many contigs (&gt;50 chromosomes).</p>
+<div id="key-features" class="section level2">
+<h2>Key Features</h2>
+<ul>
+<li><strong>Automatic format detection</strong> - misha automatically
+detects which format your database uses</li>
+<li><strong>Fully backward compatible</strong> - existing databases
+continue to work without modification</li>
+<li><strong>Transparent to users</strong> - same API for both
+formats</li>
+<li><strong>Migration tools</strong> - convert databases when
+convenient</li>
+<li><strong>Performance benefits</strong> - 4-14% faster for large-scale
+analyses</li>
+</ul>
+</div>
+</div>
+<div id="database-formats" class="section level1">
+<h1>Database Formats</h1>
+<div id="indexed-format-recommended" class="section level2">
+<h2>Indexed Format (Recommended)</h2>
+<p>The indexed format uses unified files:</p>
+<p><strong>Sequence data:</strong> - <code>seq/genome.seq</code> - All
+chromosome sequences concatenated - <code>seq/genome.idx</code> - Index
+mapping chromosome names to positions</p>
+<p><strong>Track data:</strong> -
+<code>tracks/mytrack.track/track.dat</code> - All chromosome data
+concatenated - <code>tracks/mytrack.track/track.idx</code> - Index with
+offset/length per chromosome</p>
+<p><strong>Advantages:</strong> - Fewer file descriptors (important for
+genomes with 100+ contigs) - Better performance for large workloads (14%
+faster) - Smaller disk footprint - Faster track creation and
+conversion</p>
+</div>
+<div id="per-chromosome-format-legacy" class="section level2">
+<h2>Per-Chromosome Format (Legacy)</h2>
+<p>The per-chromosome format uses separate files:</p>
+<p><strong>Sequence data:</strong> - <code>seq/chr1.seq</code>,
+<code>seq/chr2.seq</code>, … - One file per chromosome</p>
+<p><strong>Track data:</strong> -
+<code>tracks/mytrack.track/chr1.track</code>, <code>chr2.track</code>, …
+- One file per chromosome</p>
+<p><strong>When to use:</strong> - Compatibility with older misha
+versions (&lt;5.3.0) - Small genomes (&lt;25 chromosomes) where
+performance difference is negligible</p>
+</div>
+</div>
+<div id="creating-databases" class="section level1">
+<h1>Creating Databases</h1>
+<div id="new-databases-indexed-format" class="section level2">
+<h2>New Databases (Indexed Format)</h2>
+<p>By default, new databases use the indexed format:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a><span class="co"># Create database from FASTA file</span></span>
+<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a><span class="fu">gdb.create</span>(<span class="st">&quot;mydb&quot;</span>, <span class="st">&quot;/path/to/genome.fa&quot;</span>)</span>
+<span id="cb2-3"><a href="#cb2-3" tabindex="-1"></a></span>
+<span id="cb2-4"><a href="#cb2-4" tabindex="-1"></a><span class="co"># Or download pre-built genome</span></span>
+<span id="cb2-5"><a href="#cb2-5" tabindex="-1"></a><span class="fu">gdb.create_genome</span>(<span class="st">&quot;hg38&quot;</span>, <span class="at">path =</span> <span class="st">&quot;/path/to/install&quot;</span>)</span></code></pre></div>
+</div>
+<div id="force-legacy-format" class="section level2">
+<h2>Force Legacy Format</h2>
+<p>To create a database in legacy format (for compatibility with older
+misha):</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" tabindex="-1"></a><span class="co"># Set option before creating database</span></span>
+<span id="cb3-2"><a href="#cb3-2" tabindex="-1"></a><span class="fu">options</span>(<span class="at">gmulticontig.indexed_format =</span> <span class="cn">FALSE</span>)</span>
+<span id="cb3-3"><a href="#cb3-3" tabindex="-1"></a><span class="fu">gdb.create</span>(<span class="st">&quot;mydb&quot;</span>, <span class="st">&quot;/path/to/genome.fa&quot;</span>)</span></code></pre></div>
+</div>
+</div>
+<div id="checking-database-format" class="section level1">
+<h1>Checking Database Format</h1>
+<p>Use <code>gdb.info()</code> to check your database format:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" tabindex="-1"></a><span class="fu">gsetroot</span>(<span class="st">&quot;/path/to/mydb&quot;</span>)</span>
+<span id="cb4-2"><a href="#cb4-2" tabindex="-1"></a>info <span class="ot">&lt;-</span> <span class="fu">gdb.info</span>()</span>
+<span id="cb4-3"><a href="#cb4-3" tabindex="-1"></a><span class="fu">print</span>(info<span class="sc">$</span>format) <span class="co"># &quot;indexed&quot; or &quot;per-chromosome&quot;</span></span></code></pre></div>
+<p>Example output:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" tabindex="-1"></a>info <span class="ot">&lt;-</span> <span class="fu">gdb.info</span>()</span>
+<span id="cb5-2"><a href="#cb5-2" tabindex="-1"></a><span class="co"># $path</span></span>
+<span id="cb5-3"><a href="#cb5-3" tabindex="-1"></a><span class="co"># [1] &quot;/path/to/mydb&quot;</span></span>
+<span id="cb5-4"><a href="#cb5-4" tabindex="-1"></a><span class="co">#</span></span>
+<span id="cb5-5"><a href="#cb5-5" tabindex="-1"></a><span class="co"># $is_db</span></span>
+<span id="cb5-6"><a href="#cb5-6" tabindex="-1"></a><span class="co"># [1] TRUE</span></span>
+<span id="cb5-7"><a href="#cb5-7" tabindex="-1"></a><span class="co">#</span></span>
+<span id="cb5-8"><a href="#cb5-8" tabindex="-1"></a><span class="co"># $format</span></span>
+<span id="cb5-9"><a href="#cb5-9" tabindex="-1"></a><span class="co"># [1] &quot;indexed&quot;</span></span>
+<span id="cb5-10"><a href="#cb5-10" tabindex="-1"></a><span class="co">#</span></span>
+<span id="cb5-11"><a href="#cb5-11" tabindex="-1"></a><span class="co"># $num_chromosomes</span></span>
+<span id="cb5-12"><a href="#cb5-12" tabindex="-1"></a><span class="co"># [1] 24</span></span>
+<span id="cb5-13"><a href="#cb5-13" tabindex="-1"></a><span class="co">#</span></span>
+<span id="cb5-14"><a href="#cb5-14" tabindex="-1"></a><span class="co"># $genome_size</span></span>
+<span id="cb5-15"><a href="#cb5-15" tabindex="-1"></a><span class="co"># [1] 3095693983</span></span></code></pre></div>
+</div>
+<div id="converting-databases" class="section level1">
+<h1>Converting Databases</h1>
+<div id="convert-entire-database" class="section level2">
+<h2>Convert Entire Database</h2>
+<p>Convert all tracks and sequences to indexed format:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" tabindex="-1"></a><span class="fu">gsetroot</span>(<span class="st">&quot;/path/to/mydb&quot;</span>)</span>
+<span id="cb6-2"><a href="#cb6-2" tabindex="-1"></a><span class="fu">gdb.convert_to_indexed</span>()</span></code></pre></div>
+<p>This will: 1. Convert sequence files (<code>chr*.seq</code> →
+<code>genome.seq + genome.idx</code>) 2. Convert all tracks to indexed
+format 3. Validate conversions 4. Remove old files after successful
+conversion</p>
+</div>
+<div id="convert-individual-tracks" class="section level2">
+<h2>Convert Individual Tracks</h2>
+<p>Convert specific tracks while keeping others in legacy format:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" tabindex="-1"></a><span class="fu">gtrack.convert_to_indexed</span>(<span class="st">&quot;mytrack&quot;</span>)</span></code></pre></div>
+<p>Note that 2D tracks cannot be converted to indexed format yet.</p>
+</div>
+<div id="convert-intervals" class="section level2">
+<h2>Convert Intervals</h2>
+<p>Convert interval sets to indexed format:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" tabindex="-1"></a><span class="co"># 1D intervals</span></span>
+<span id="cb8-2"><a href="#cb8-2" tabindex="-1"></a><span class="fu">gintervals.convert_to_indexed</span>(<span class="st">&quot;myintervals&quot;</span>)</span>
+<span id="cb8-3"><a href="#cb8-3" tabindex="-1"></a></span>
+<span id="cb8-4"><a href="#cb8-4" tabindex="-1"></a><span class="co"># 2D intervals</span></span>
+<span id="cb8-5"><a href="#cb8-5" tabindex="-1"></a><span class="fu">gintervals.2d.convert_to_indexed</span>(<span class="st">&quot;my2dintervals&quot;</span>)</span></code></pre></div>
+</div>
+</div>
+<div id="migration-guide" class="section level1">
+<h1>Migration Guide</h1>
+<div id="when-to-migrate" class="section level2">
+<h2>When to Migrate</h2>
+<p><strong>High priority (significant benefits):</strong> - Genomes with
+many contigs (&gt;50 chromosomes) - Large-scale analyses (10M+ bp
+regions frequently) - 2D track workflows - File descriptor limit
+issues</p>
+<p><strong>Medium priority (moderate benefits):</strong> - Repeated
+extraction workflows - Regular analyses on medium-sized regions (1-10M
+bp)</p>
+<p><strong>Low priority (minimal benefits):</strong> - Small genomes
+(&lt;25 chromosomes) - One-off analyses - Simple queries on small
+regions</p>
+</div>
+<div id="migration-workflow" class="section level2">
+<h2>Migration Workflow</h2>
+<p><strong>Step 1: Backup (optional but recommended)</strong></p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" tabindex="-1"></a><span class="co"># Create backup of important database</span></span>
+<span id="cb9-2"><a href="#cb9-2" tabindex="-1"></a><span class="fu">system</span>(<span class="st">&quot;cp -r /path/to/mydb /path/to/mydb.backup&quot;</span>)</span></code></pre></div>
+<p><strong>Step 2: Check current format</strong></p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" tabindex="-1"></a><span class="fu">gsetroot</span>(<span class="st">&quot;/path/to/mydb&quot;</span>)</span>
+<span id="cb10-2"><a href="#cb10-2" tabindex="-1"></a>info <span class="ot">&lt;-</span> <span class="fu">gdb.info</span>()</span>
+<span id="cb10-3"><a href="#cb10-3" tabindex="-1"></a><span class="fu">print</span>(<span class="fu">paste</span>(<span class="st">&quot;Current format:&quot;</span>, info<span class="sc">$</span>format))</span></code></pre></div>
+<p><strong>Step 3: Convert</strong></p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" tabindex="-1"></a><span class="fu">gdb.convert_to_indexed</span>()</span></code></pre></div>
+<p><strong>Step 4: Verify</strong></p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" tabindex="-1"></a><span class="co"># Check format changed</span></span>
+<span id="cb12-2"><a href="#cb12-2" tabindex="-1"></a>info <span class="ot">&lt;-</span> <span class="fu">gdb.info</span>()</span>
+<span id="cb12-3"><a href="#cb12-3" tabindex="-1"></a><span class="fu">print</span>(<span class="fu">paste</span>(<span class="st">&quot;New format:&quot;</span>, info<span class="sc">$</span>format))</span>
+<span id="cb12-4"><a href="#cb12-4" tabindex="-1"></a></span>
+<span id="cb12-5"><a href="#cb12-5" tabindex="-1"></a><span class="co"># Test a few operations</span></span>
+<span id="cb12-6"><a href="#cb12-6" tabindex="-1"></a>result <span class="ot">&lt;-</span> <span class="fu">gextract</span>(<span class="st">&quot;mytrack&quot;</span>, <span class="fu">gintervals</span>(<span class="dv">1</span>, <span class="dv">0</span>, <span class="dv">1000</span>))</span>
+<span id="cb12-7"><a href="#cb12-7" tabindex="-1"></a><span class="fu">print</span>(<span class="fu">head</span>(result))</span></code></pre></div>
+<p><strong>Step 5: Remove backup (after validation)</strong></p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" tabindex="-1"></a><span class="co"># After thorough testing</span></span>
+<span id="cb13-2"><a href="#cb13-2" tabindex="-1"></a><span class="fu">system</span>(<span class="st">&quot;rm -rf /path/to/mydb.backup&quot;</span>)</span></code></pre></div>
+</div>
+</div>
+<div id="copying-tracks-between-databases" class="section level1">
+<h1>Copying Tracks Between Databases</h1>
+<p>You can freely copy tracks between databases with different
+formats.</p>
+<div id="method-1-export-and-import" class="section level2">
+<h2>Method 1: Export and Import</h2>
+<div class="sourceCode" id="cb14"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" tabindex="-1"></a><span class="co"># Export from source database</span></span>
+<span id="cb14-2"><a href="#cb14-2" tabindex="-1"></a><span class="fu">gsetroot</span>(<span class="st">&quot;/path/to/source_db&quot;</span>)</span>
+<span id="cb14-3"><a href="#cb14-3" tabindex="-1"></a><span class="fu">gextract</span>(<span class="st">&quot;mytrack&quot;</span>, <span class="fu">gintervals.all</span>(),</span>
+<span id="cb14-4"><a href="#cb14-4" tabindex="-1"></a>    <span class="at">iterator =</span> <span class="st">&quot;mytrack&quot;</span>,</span>
+<span id="cb14-5"><a href="#cb14-5" tabindex="-1"></a>    <span class="at">file =</span> <span class="st">&quot;/tmp/mytrack.txt&quot;</span></span>
+<span id="cb14-6"><a href="#cb14-6" tabindex="-1"></a>)</span>
+<span id="cb14-7"><a href="#cb14-7" tabindex="-1"></a></span>
+<span id="cb14-8"><a href="#cb14-8" tabindex="-1"></a><span class="co"># Import to target database (format auto-detected)</span></span>
+<span id="cb14-9"><a href="#cb14-9" tabindex="-1"></a><span class="fu">gsetroot</span>(<span class="st">&quot;/path/to/target_db&quot;</span>)</span>
+<span id="cb14-10"><a href="#cb14-10" tabindex="-1"></a><span class="fu">gtrack.import</span>(<span class="st">&quot;mytrack&quot;</span>, <span class="st">&quot;Copied track&quot;</span>, <span class="st">&quot;/tmp/mytrack.txt&quot;</span>, <span class="at">binsize =</span> <span class="dv">0</span>)</span>
+<span id="cb14-11"><a href="#cb14-11" tabindex="-1"></a><span class="co"># Automatically converted to target database format!</span></span></code></pre></div>
+</div>
+<div id="method-2-batch-copy" class="section level2">
+<h2>Method 2: Batch Copy</h2>
+<div class="sourceCode" id="cb15"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb15-1"><a href="#cb15-1" tabindex="-1"></a><span class="co"># Copy multiple tracks</span></span>
+<span id="cb15-2"><a href="#cb15-2" tabindex="-1"></a>tracks <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="st">&quot;track1&quot;</span>, <span class="st">&quot;track2&quot;</span>, <span class="st">&quot;track3&quot;</span>)</span>
+<span id="cb15-3"><a href="#cb15-3" tabindex="-1"></a></span>
+<span id="cb15-4"><a href="#cb15-4" tabindex="-1"></a><span class="cf">for</span> (track <span class="cf">in</span> tracks) {</span>
+<span id="cb15-5"><a href="#cb15-5" tabindex="-1"></a>    <span class="co"># Export</span></span>
+<span id="cb15-6"><a href="#cb15-6" tabindex="-1"></a>    <span class="fu">gsetroot</span>(<span class="st">&quot;/path/to/source_db&quot;</span>)</span>
+<span id="cb15-7"><a href="#cb15-7" tabindex="-1"></a>    file_path <span class="ot">&lt;-</span> <span class="fu">sprintf</span>(<span class="st">&quot;/tmp/%s.txt&quot;</span>, track)</span>
+<span id="cb15-8"><a href="#cb15-8" tabindex="-1"></a>    <span class="fu">gextract</span>(track, <span class="fu">gintervals.all</span>(), <span class="at">iterator =</span> track, <span class="at">file =</span> file_path)</span>
+<span id="cb15-9"><a href="#cb15-9" tabindex="-1"></a></span>
+<span id="cb15-10"><a href="#cb15-10" tabindex="-1"></a>    <span class="co"># Import</span></span>
+<span id="cb15-11"><a href="#cb15-11" tabindex="-1"></a>    <span class="fu">gsetroot</span>(<span class="st">&quot;/path/to/target_db&quot;</span>)</span>
+<span id="cb15-12"><a href="#cb15-12" tabindex="-1"></a>    info <span class="ot">&lt;-</span> <span class="fu">gtrack.info</span>(track) <span class="co"># Get description</span></span>
+<span id="cb15-13"><a href="#cb15-13" tabindex="-1"></a>    <span class="fu">gtrack.import</span>(track, info<span class="sc">$</span>description, file_path, <span class="at">binsize =</span> <span class="dv">0</span>)</span>
+<span id="cb15-14"><a href="#cb15-14" tabindex="-1"></a>    <span class="fu">unlink</span>(file_path)</span>
+<span id="cb15-15"><a href="#cb15-15" tabindex="-1"></a>}</span></code></pre></div>
+</div>
+</div>
+<div id="performance-comparison" class="section level1">
+<h1>Performance Comparison</h1>
+<p>Based on comprehensive benchmarks comparing indexed vs legacy
+formats:</p>
+<div id="operations-faster-with-indexed-format" class="section level2">
+<h2>Operations Faster with Indexed Format</h2>
+<ul>
+<li><strong>Very large workloads (10M+ bp)</strong>: 14% faster</li>
+<li><strong>2D track operations</strong>: 2% faster (was 36% slower in
+legacy)</li>
+<li><strong>Repeated extractions</strong>: 14% faster</li>
+<li><strong>Real workflows</strong>: 8% faster on average</li>
+</ul>
+</div>
+<div id="operations-similar-performance" class="section level2">
+<h2>Operations Similar Performance</h2>
+<ul>
+<li>Single chromosome extraction: Within 5%</li>
+<li>Multi-chromosome (10-22 chr): Within 1%</li>
+<li>PWM operations: Within 3%</li>
+<li>Small workloads (&lt;1M bp): Within 10%</li>
+</ul>
+</div>
+<div id="summary" class="section level2">
+<h2>Summary</h2>
+<ul>
+<li><strong>64% of operations are faster</strong> with indexed
+format</li>
+<li><strong>93% within 5%</strong> of legacy format (statistically
+equal)</li>
+<li><strong>Average: 4% faster</strong> across all benchmarks</li>
+<li><strong>No regressions</strong> for common use cases</li>
+</ul>
+</div>
+</div>
+<div id="backward-compatibility" class="section level1">
+<h1>Backward Compatibility</h1>
+<div id="fully-compatible" class="section level2">
+<h2>Fully Compatible</h2>
+<ul>
+<li>✅ Existing databases work without modification</li>
+<li>✅ Existing scripts work without changes</li>
+<li>✅ Same API for both formats</li>
+<li>✅ Automatic format detection</li>
+<li>✅ Can mix formats in same analysis</li>
+</ul>
+</div>
+<div id="example-mixed-environment" class="section level2">
+<h2>Example: Mixed Environment</h2>
+<div class="sourceCode" id="cb16"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb16-1"><a href="#cb16-1" tabindex="-1"></a><span class="co"># Work with both formats in same session</span></span>
+<span id="cb16-2"><a href="#cb16-2" tabindex="-1"></a><span class="fu">gsetroot</span>(<span class="st">&quot;/path/to/legacy_db&quot;</span>)</span>
+<span id="cb16-3"><a href="#cb16-3" tabindex="-1"></a>data1 <span class="ot">&lt;-</span> <span class="fu">gextract</span>(<span class="st">&quot;track1&quot;</span>, <span class="fu">gintervals</span>(<span class="dv">1</span>, <span class="dv">0</span>, <span class="dv">1000</span>))</span>
+<span id="cb16-4"><a href="#cb16-4" tabindex="-1"></a></span>
+<span id="cb16-5"><a href="#cb16-5" tabindex="-1"></a><span class="fu">gsetroot</span>(<span class="st">&quot;/path/to/indexed_db&quot;</span>)</span>
+<span id="cb16-6"><a href="#cb16-6" tabindex="-1"></a>data2 <span class="ot">&lt;-</span> <span class="fu">gextract</span>(<span class="st">&quot;track2&quot;</span>, <span class="fu">gintervals</span>(<span class="dv">1</span>, <span class="dv">0</span>, <span class="dv">1000</span>))</span></code></pre></div>
+</div>
+</div>
+<div id="troubleshooting" class="section level1">
+<h1>Troubleshooting</h1>
+<div id="file-descriptor-limit-reached" class="section level2">
+<h2>“File descriptor limit reached”</h2>
+<p>This occurs with many-contig genomes in legacy format:</p>
+<p><strong>Solution:</strong> Convert to indexed format</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb17-1"><a href="#cb17-1" tabindex="-1"></a><span class="fu">gdb.convert_to_indexed</span>()</span></code></pre></div>
+</div>
+<div id="track-not-found-after-copying-files" class="section level2">
+<h2>“Track not found after copying files”</h2>
+<p>After manually copying track directories:</p>
+<p><strong>Solution:</strong> Reload database</p>
+<div class="sourceCode" id="cb18"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb18-1"><a href="#cb18-1" tabindex="-1"></a><span class="fu">gdb.reload</span>()</span></code></pre></div>
+</div>
+<div id="conversion-fails-with-disk-space-error" class="section level2">
+<h2>“Conversion fails with disk space error”</h2>
+<p>Conversion needs 2x track size temporarily:</p>
+<p><strong>Solution:</strong> Free disk space or convert tracks
+individually</p>
+<div class="sourceCode" id="cb19"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb19-1"><a href="#cb19-1" tabindex="-1"></a><span class="co"># Convert one track at a time</span></span>
+<span id="cb19-2"><a href="#cb19-2" tabindex="-1"></a><span class="fu">gtrack.convert_to_indexed</span>(<span class="st">&quot;track1&quot;</span>)</span>
+<span id="cb19-3"><a href="#cb19-3" tabindex="-1"></a><span class="fu">gtrack.convert_to_indexed</span>(<span class="st">&quot;track2&quot;</span>)</span>
+<span id="cb19-4"><a href="#cb19-4" tabindex="-1"></a><span class="co"># etc.</span></span></code></pre></div>
+</div>
+</div>
+<div id="best-practices" class="section level1">
+<h1>Best Practices</h1>
+<div id="for-new-projects" class="section level2">
+<h2>For New Projects</h2>
+<ol style="list-style-type: decimal">
+<li>Use indexed format (default) for new databases</li>
+<li>Use <code>gdb.create_genome()</code> for standard genomes</li>
+<li>Use <code>gdb.create()</code> with multi-FASTA for custom
+genomes</li>
+</ol>
+</div>
+<div id="for-existing-projects" class="section level2">
+<h2>For Existing Projects</h2>
+<ol style="list-style-type: decimal">
+<li>Check format with <code>gdb.info()</code></li>
+<li>Migrate if beneficial (many contigs, large analyses)</li>
+<li>No rush - legacy format remains fully supported</li>
+</ol>
+</div>
+</div>
+<div id="summary-1" class="section level1">
+<h1>Summary</h1>
+<ul>
+<li><strong>Indexed format is the default and recommended</strong> for
+new databases</li>
+<li><strong>Legacy format remains fully supported</strong> - no forced
+migration</li>
+<li><strong>Automatic format detection</strong> - users don’t need to
+think about it</li>
+<li><strong>Significant performance benefits</strong> for large-scale
+analyses</li>
+<li><strong>Easy migration</strong> with
+<code>gdb.convert_to_indexed()</code></li>
+<li><strong>Fully backward compatible</strong> - existing code works
+unchanged</li>
+</ul>
+</div>
+
+
+
+<!-- code folding -->
+
+
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+  (function () {
+    var script = document.createElement("script");
+    script.type = "text/javascript";
+    script.src  = "https://mathjax.rstudio.com/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML";
+    document.getElementsByTagName("head")[0].appendChild(script);
+  })();
+</script>
+
+</body>
+</html>

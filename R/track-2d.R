@@ -5,7 +5,7 @@
     .gcheckroot()
 
     trackstr <- do.call(.gexpr2str, list(substitute(track)), envir = parent.frame())
-    trackdir <- sprintf("%s.track", paste(get("GWD", envir = .misha), gsub("\\.", "/", trackstr), sep = "/"))
+    trackdir <- .track_dir(trackstr)
 
     direxisted <- file.exists(trackdir)
 
@@ -17,7 +17,7 @@
     success <- FALSE
     tryCatch(
         {
-            .gcall("gcreate_test_computer2d_track", trackstr, prob.skip.chrom, max.rect, max.rect.size, .misha_env(), silent = TRUE)
+            .gcall("gcreate_test_computer2d_track", trackstr, prob.skip.chrom, max.rect, max.rect.size, .misha_env())
             .gdb.add_track(trackstr)
             .gtrack.attr.set(trackstr, "created.by", sprintf(".gtrack.create_test_computer2d(%s, %g, %g, %g)", trackstr, prob.skip.chrom, max.rect, max.rect.size), TRUE)
             .gtrack.attr.set(trackstr, "created.date", date(), TRUE)
@@ -33,8 +33,6 @@
     )
     retv <- 0 # suppress return value
 }
-
-
 
 
 #' Creates a 'Rectangles' track from intervals and values
@@ -88,7 +86,7 @@ gtrack.2d.create <- function(track = NULL, description = NULL, intervals = NULL,
     trackstr <- do.call(.gexpr2str, list(substitute(track)), envir = parent.frame())
     intervalsstr <- deparse(substitute(intervals), width.cutoff = 500)[1]
     valuesstr <- deparse(substitute(values), width.cutoff = 500)[1]
-    trackdir <- sprintf("%s.track", paste(get("GWD", envir = .misha), gsub("\\.", "/", trackstr), sep = "/"))
+    trackdir <- .track_dir(trackstr)
 
     direxisted <- file.exists(trackdir)
 
@@ -100,7 +98,7 @@ gtrack.2d.create <- function(track = NULL, description = NULL, intervals = NULL,
     success <- FALSE
     tryCatch(
         {
-            .gcall("gtrack_create_track2d", trackstr, intervals, values, .misha_env(), silent = TRUE)
+            .gcall("gtrack_create_track2d", trackstr, intervals, values, .misha_env())
             .gdb.add_track(trackstr)
             .gtrack.attr.set(trackstr, "created.by", sprintf("gtrack.2d.create(%s, description, %s, %s)", trackstr, intervalsstr, valuesstr), TRUE)
             .gtrack.attr.set(trackstr, "created.date", date(), TRUE)
@@ -117,7 +115,6 @@ gtrack.2d.create <- function(track = NULL, description = NULL, intervals = NULL,
     )
     retv <- 0 # suppress return value
 }
-
 
 
 #' Creates a 2D track from tab-delimited file
@@ -169,7 +166,7 @@ gtrack.2d.import <- function(track = NULL, description = NULL, file = NULL) {
     .gcheckroot()
 
     trackstr <- do.call(.gexpr2str, list(substitute(track)), envir = parent.frame())
-    trackdir <- sprintf("%s.track", paste(get("GWD", envir = .misha), gsub("\\.", "/", trackstr), sep = "/"))
+    trackdir <- .track_dir(trackstr)
 
     direxisted <- file.exists(trackdir)
 
@@ -183,7 +180,7 @@ gtrack.2d.import <- function(track = NULL, description = NULL, file = NULL) {
 
     tryCatch(
         {
-            .gcall("gtrack_2d_import", trackstr, file, .misha_env(), silent = TRUE)
+            .gcall("gtrack_2d_import", trackstr, file, .misha_env())
             .gdb.add_track(trackstr)
             .gtrack.attr.set(
                 trackstr, "created.by",
@@ -203,7 +200,6 @@ gtrack.2d.import <- function(track = NULL, description = NULL, file = NULL) {
     )
     retv <- 0 # suppress return value
 }
-
 
 
 #' Creates a track from a file of inter-genomic contacts
@@ -284,7 +280,7 @@ gtrack.2d.import_contacts <- function(track = NULL, description = NULL, contacts
     .gcheckroot()
 
     trackstr <- do.call(.gexpr2str, list(substitute(track)), envir = parent.frame())
-    trackdir <- sprintf("%s.track", paste(get("GWD", envir = .misha), gsub("\\.", "/", trackstr), sep = "/"))
+    trackdir <- .track_dir(trackstr)
 
     direxisted <- file.exists(trackdir)
 
@@ -296,7 +292,7 @@ gtrack.2d.import_contacts <- function(track = NULL, description = NULL, contacts
     success <- FALSE
     tryCatch(
         {
-            .gcall("gtrack_import_contacts", trackstr, contacts, fends, allow.duplicates, .misha_env(), silent = TRUE)
+            .gcall("gtrack_import_contacts", trackstr, contacts, fends, allow.duplicates, .misha_env())
             .gdb.add_track(trackstr)
             .gtrack.attr.set(
                 trackstr, "created.by",

@@ -6,6 +6,8 @@
  */
 
 #include <cstdint>
+#include <inttypes.h>
+#include <chrono>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -17,6 +19,17 @@
 #include "GIntervalsBigSet1D.h"
 #include "GIntervalsBigSet2D.h"
 #include "TrackExpressionScanner.h"
+
+// Optional profiling for gextract_multitask hot path.
+// Enable by setting getOption("gextract.profile") to TRUE.
+static bool is_gextract_profile_enabled() {
+	SEXP opt = Rf_GetOption1(Rf_install("gextract.profile"));
+	return !Rf_isNull(opt) && Rf_asLogical(opt) == 1;
+}
+
+static void log_gextract_timing(const char *label, double ms) {
+	Rprintf("[gextract.profile] %s: %.2f ms\n", label, ms);
+}
 
 using namespace std;
 using namespace rdb;
@@ -39,8 +52,10 @@ static SEXP build_rintervals_extract(GIntervalsFetcher1D *out_intervals1d, GInte
     for (unsigned iexpr = 0; iexpr < num_exprs; ++iexpr) {
         SEXP expr_vals;
         expr_vals = rprotect_ptr(RSaneAllocVector(REALSXP, values[iexpr].size()));
-		for (unsigned i = 0; i < values[iexpr].size(); ++i)
-			REAL(expr_vals)[i] = values[iexpr][i];
+		// Use memcpy for bulk copy instead of manual loop for better performance
+		if (values[iexpr].size() > 0) {
+			memcpy(REAL(expr_vals), values[iexpr].data(), values[iexpr].size() * sizeof(double));
+		}
         SET_VECTOR_ELT(answer, num_interv_cols + iexpr, expr_vals);
 	}
 
@@ -120,15 +135,15 @@ SEXP C_gextract(SEXP _intervals, SEXP _exprs, SEXP _colnames, SEXP _iterator_pol
 			scanner.begin(_exprs, intervals1d, intervals2d, _iterator_policy, _band);
 
 			if (scanner.get_iterator()->is_1d()) {
-				for (int i = 0; i < GInterval::NUM_COLS; ++i) 
+				for (int i = 0; i < GInterval::NUM_COLS; ++i)
 					outfile << GInterval::COL_NAMES[i] << "\t";
 			} else {
-				for (int i = 0; i < GInterval2D::NUM_COLS; ++i) 
+				for (int i = 0; i < GInterval2D::NUM_COLS; ++i)
 					outfile << GInterval2D::COL_NAMES[i] << "\t";
 			}
 
 			for (unsigned iexpr = 0; iexpr < num_exprs; ++iexpr) {
-				if (iexpr) 
+				if (iexpr)
 					outfile << "\t";
 				if (Rf_isNull(_colnames))
 					outfile << get_bounded_colname(CHAR(STRING_ELT(_exprs, iexpr)));
@@ -137,22 +152,48 @@ SEXP C_gextract(SEXP _intervals, SEXP _exprs, SEXP _colnames, SEXP _iterator_pol
 			}
 			outfile << "\n";
 
-			for (; !scanner.isend(); scanner.next()) { 
+			// Use buffered writing with snprintf for better performance than iostream
+			const size_t BUFFER_SIZE = 65536;  // 64KB buffer
+			char buffer[BUFFER_SIZE];
+			size_t buffer_pos = 0;
+
+			for (; !scanner.isend(); scanner.next()) {
+				char line[4096];  // Temporary buffer for one line
+				int len = 0;
+
 				if (scanner.get_iterator()->is_1d()) {
 					const GInterval &interval = scanner.last_interval1d();
-					outfile << iu.id2chrom(interval.chromid) << "\t" << interval.start << "\t" << interval.end;
+					len = snprintf(line, sizeof(line), "%s\t%" PRId64 "\t%" PRId64,
+						iu.id2chrom(interval.chromid).c_str(), interval.start, interval.end);
 				} else {
 					const GInterval2D &interval = scanner.last_interval2d();
-					outfile << iu.id2chrom(interval.chromid1()) << "\t" << interval.start1() << "\t" << interval.end1() << "\t" <<
-						iu.id2chrom(interval.chromid2()) << "\t" << interval.start2() << "\t" << interval.end2();
+					len = snprintf(line, sizeof(line), "%s\t%" PRId64 "\t%" PRId64 "\t%s\t%" PRId64 "\t%" PRId64,
+						iu.id2chrom(interval.chromid1()).c_str(), interval.start1(), interval.end1(),
+						iu.id2chrom(interval.chromid2()).c_str(), interval.start2(), interval.end2());
 				}
 
-				for (unsigned iexpr = 0; iexpr < num_exprs; ++iexpr)
-					outfile << "\t" << scanner.last_real(iexpr);
-				outfile << "\n";
+				for (unsigned iexpr = 0; iexpr < num_exprs; ++iexpr) {
+					len += snprintf(line + len, sizeof(line) - len, "\t%.15g", scanner.last_real(iexpr));
+				}
+				len += snprintf(line + len, sizeof(line) - len, "\n");
+
+				// Flush buffer if not enough space for this line
+				if (buffer_pos + len >= BUFFER_SIZE) {
+					outfile.write(buffer, buffer_pos);
+					buffer_pos = 0;
+				}
+
+				memcpy(buffer + buffer_pos, line, len);
+				buffer_pos += len;
 
 				check_interrupt();
 			}
+
+			// Flush any remaining data
+			if (buffer_pos > 0) {
+				outfile.write(buffer, buffer_pos);
+			}
+
 			if (outfile.fail())
 				verror("Failed to write to file %s: %s\n", filename, strerror(errno));
 
@@ -162,6 +203,9 @@ SEXP C_gextract(SEXP _intervals, SEXP _exprs, SEXP _colnames, SEXP _iterator_pol
 		GIntervals out_intervals1d;
 		GIntervals2D out_intervals2d;
 		vector< vector<double> > values(num_exprs);
+
+		// Pre-reserve memory for the regular (non-file) path to avoid reallocations
+		uint64_t max_size = intervals1d ? intervals1d->size() : intervals2d->size();
 
 		if (!intervset_out.empty()) {
 			bool is_1d_iterator = iu.is_1d_iterator(_exprs, intervals1d, intervals2d, _iterator_policy);
@@ -238,6 +282,16 @@ SEXP C_gextract(SEXP _intervals, SEXP _exprs, SEXP _colnames, SEXP _iterator_pol
 
 		vector<unsigned> interv_ids;
 
+		// Reserve memory to avoid reallocations during the main loop
+		for (auto& v : values) {
+			v.reserve(max_size);
+		}
+		if (intervals1d)
+			out_intervals1d.reserve(max_size);
+		else
+			out_intervals2d.reserve(max_size);
+		interv_ids.reserve(max_size);
+
 		for (scanner.begin(_exprs, intervals1d, intervals2d, _iterator_policy, _band); !scanner.isend(); scanner.next()) {
 			for (unsigned iexpr = 0; iexpr < num_exprs; ++iexpr)
 				values[iexpr].push_back(scanner.last_real(iexpr));
@@ -278,6 +332,7 @@ SEXP gextract_multitask(SEXP _intervals, SEXP _exprs, SEXP _colnames, SEXP _iter
 {
 	try {
 		RdbInitializer rdb_init;
+		const bool profile = is_gextract_profile_enabled();
 
 		if (!Rf_isString(_exprs) || Rf_length(_exprs) < 1)
 			verror("Tracks expressions argument must be a vector of strings");
@@ -330,15 +385,15 @@ SEXP gextract_multitask(SEXP _intervals, SEXP _exprs, SEXP _colnames, SEXP _iter
 			scanner.begin(_exprs, intervals1d, intervals2d, _iterator_policy, _band);
 
 			if (scanner.get_iterator()->is_1d()) {
-				for (int i = 0; i < GInterval::NUM_COLS; ++i) 
+				for (int i = 0; i < GInterval::NUM_COLS; ++i)
 					outfile << GInterval::COL_NAMES[i] << "\t";
 			} else {
-				for (int i = 0; i < GInterval2D::NUM_COLS; ++i) 
+				for (int i = 0; i < GInterval2D::NUM_COLS; ++i)
 					outfile << GInterval2D::COL_NAMES[i] << "\t";
 			}
 
 			for (unsigned iexpr = 0; iexpr < num_exprs; ++iexpr) {
-				if (iexpr) 
+				if (iexpr)
 					outfile << "\t";
 				if (Rf_isNull(_colnames))
 					outfile << get_bounded_colname(CHAR(STRING_ELT(_exprs, iexpr)));
@@ -347,22 +402,48 @@ SEXP gextract_multitask(SEXP _intervals, SEXP _exprs, SEXP _colnames, SEXP _iter
 			}
 			outfile << "\n";
 
-			for (; !scanner.isend(); scanner.next()) { 
+			// Use buffered writing with snprintf for better performance than iostream
+			const size_t BUFFER_SIZE = 65536;  // 64KB buffer
+			char buffer[BUFFER_SIZE];
+			size_t buffer_pos = 0;
+
+			for (; !scanner.isend(); scanner.next()) {
+				char line[4096];  // Temporary buffer for one line
+				int len = 0;
+
 				if (scanner.get_iterator()->is_1d()) {
 					const GInterval &interval = scanner.last_interval1d();
-					outfile << iu.id2chrom(interval.chromid) << "\t" << interval.start << "\t" << interval.end;
+					len = snprintf(line, sizeof(line), "%s\t%" PRId64 "\t%" PRId64,
+						iu.id2chrom(interval.chromid).c_str(), interval.start, interval.end);
 				} else {
 					const GInterval2D &interval = scanner.last_interval2d();
-					outfile << iu.id2chrom(interval.chromid1()) << "\t" << interval.start1() << "\t" << interval.end1() << "\t" <<
-						iu.id2chrom(interval.chromid2()) << "\t" << interval.start2() << "\t" << interval.end2();
+					len = snprintf(line, sizeof(line), "%s\t%" PRId64 "\t%" PRId64 "\t%s\t%" PRId64 "\t%" PRId64,
+						iu.id2chrom(interval.chromid1()).c_str(), interval.start1(), interval.end1(),
+						iu.id2chrom(interval.chromid2()).c_str(), interval.start2(), interval.end2());
 				}
 
-				for (unsigned iexpr = 0; iexpr < num_exprs; ++iexpr)
-					outfile << "\t" << scanner.last_real(iexpr);
-				outfile << "\n";
+				for (unsigned iexpr = 0; iexpr < num_exprs; ++iexpr) {
+					len += snprintf(line + len, sizeof(line) - len, "\t%.15g", scanner.last_real(iexpr));
+				}
+				len += snprintf(line + len, sizeof(line) - len, "\n");
+
+				// Flush buffer if not enough space for this line
+				if (buffer_pos + len >= BUFFER_SIZE) {
+					outfile.write(buffer, buffer_pos);
+					buffer_pos = 0;
+				}
+
+				memcpy(buffer + buffer_pos, line, len);
+				buffer_pos += len;
 
 				check_interrupt();
 			}
+
+			// Flush any remaining data
+			if (buffer_pos > 0) {
+				outfile.write(buffer, buffer_pos);
+			}
+
 			if (outfile.fail())
 				verror("Failed to write to file %s: %s\n", filename, strerror(errno));
 
@@ -370,6 +451,15 @@ SEXP gextract_multitask(SEXP _intervals, SEXP _exprs, SEXP _colnames, SEXP _iter
 		}
 
 		bool is_1d_iterator = iu.is_1d_iterator(_exprs, intervals1d, intervals2d, _iterator_policy);
+
+		// Estimate result size and select appropriate multitasking mode
+		uint64_t estimated_records = is_1d_iterator ? intervals1d->size() : intervals2d->size();
+		rdb::MultitaskingMode mode = iu.select_multitasking_mode(true, estimated_records);
+
+		// If mode is SINGLE (size too large), fall back to non-multitasking version
+		if (mode == rdb::MT_MODE_SINGLE) {
+			return C_gextract(_intervals, _exprs, _colnames, _iterator_policy, _band, R_NilValue, _intervals_set_out, _envir);
+		}
 
 		if (!iu.prepare4multitasking(_exprs, intervals1d, intervals2d, _iterator_policy, _band))
 			rreturn(R_NilValue);
@@ -492,6 +582,17 @@ SEXP gextract_multitask(SEXP _intervals, SEXP _exprs, SEXP _colnames, SEXP _iter
 			GIntervalsFetcher1D *kid_intervals1d = iu.get_kid_intervals1d();
 			GIntervalsFetcher2D *kid_intervals2d = iu.get_kid_intervals2d();
 			TrackExprScanner scanner(iu);
+			auto t_scan_start = std::chrono::steady_clock::now();
+
+			// Pre-reserve buffers to avoid reallocations during the scan.
+			uint64_t kid_size = is_1d_iterator ? kid_intervals1d->size() : kid_intervals2d->size();
+			if (is_1d_iterator)
+				out_intervals1d.reserve(kid_size);
+			else
+				out_intervals2d.reserve(kid_size);
+			interv_ids.reserve(kid_size);
+			for (unsigned i = 0; i < num_exprs; ++i)
+				values[i].reserve(kid_size);
 			
 			for (scanner.begin(_exprs, kid_intervals1d, kid_intervals2d, _iterator_policy, _band); !scanner.isend(); scanner.next()) {
 				for (unsigned iexpr = 0; iexpr < num_exprs; ++iexpr)
@@ -525,9 +626,30 @@ SEXP gextract_multitask(SEXP _intervals, SEXP _exprs, SEXP _colnames, SEXP _iter
 			
 			for (unsigned i = 0; i < num_exprs; ++i)
 				pack_data(result, values[i].front(), num_intervals);
+
+			if (profile) {
+				auto t_end = std::chrono::steady_clock::now();
+				double scan_ms = std::chrono::duration<double, std::milli>(t_end - t_scan_start).count();
+				log_gextract_timing("child_scan_pack_ms", scan_ms);
+			}
 			
 		} else {  // parent process
+			auto t_gather_start = std::chrono::steady_clock::now();
+
 			// collect results from kids
+			// First pass: compute total sizes to pre-reserve and avoid repeated reallocations.
+			uint64_t total_intervals = 0;
+			for (int i = 0; i < get_num_kids(); ++i) {
+				total_intervals += get_kid_res_size(i);
+			}
+			if (is_1d_iterator)
+				out_intervals1d.reserve(total_intervals);
+			else
+				out_intervals2d.reserve(total_intervals);
+			interv_ids.reserve(total_intervals);
+			for (unsigned i = 0; i < num_exprs; ++i)
+				values[i].reserve(total_intervals);
+
 			for (int i = 0; i < get_num_kids(); ++i) {
 				void *ptr = get_kid_res(i);
 				num_intervals = get_kid_res_size(i);
@@ -555,6 +677,8 @@ SEXP gextract_multitask(SEXP _intervals, SEXP _exprs, SEXP _colnames, SEXP _iter
 			if (out_intervals1d.empty() && out_intervals2d.empty()) 
 				rreturn(R_NilValue);
 
+			auto t_assemble_start = std::chrono::steady_clock::now();
+
 			// assemble the answer
 			SEXP answer;
 			unsigned num_interv_cols;
@@ -568,17 +692,16 @@ SEXP gextract_multitask(SEXP _intervals, SEXP _exprs, SEXP _colnames, SEXP _iter
 			}
 
             for (unsigned iexpr = 0; iexpr < num_exprs; ++iexpr) {
-                SEXP expr_vals;
-                expr_vals = rprotect_ptr(RSaneAllocVector(REALSXP, values[iexpr].size()));
-				for (unsigned i = 0; i < values[iexpr].size(); ++i)
-					REAL(expr_vals)[i] = values[iexpr][i];
+                SEXP expr_vals = rprotect_ptr(RSaneAllocVector(REALSXP, values[iexpr].size()));
+				// values[iexpr] is contiguous; copy in one shot
+				if (!values[iexpr].empty())
+					memcpy(REAL(expr_vals), &values[iexpr][0], sizeof(double) * values[iexpr].size());
                 SET_VECTOR_ELT(answer, num_interv_cols + iexpr, expr_vals);
 			}
 
-            SEXP ids;
-            ids = rprotect_ptr(RSaneAllocVector(INTSXP, interv_ids.size()));
-			for (vector<unsigned>::const_iterator iid = interv_ids.begin(); iid != interv_ids.end(); ++iid)
-				INTEGER(ids)[iid - interv_ids.begin()] = *iid;
+            SEXP ids = rprotect_ptr(RSaneAllocVector(INTSXP, interv_ids.size()));
+			if (!interv_ids.empty())
+				memcpy(INTEGER(ids), &interv_ids[0], sizeof(int) * interv_ids.size());
 			SET_VECTOR_ELT(answer, num_interv_cols + num_exprs, ids);
 
             SEXP col_names = rprotect_ptr(Rf_getAttrib(answer, R_NamesSymbol));
@@ -591,6 +714,14 @@ SEXP gextract_multitask(SEXP _intervals, SEXP _exprs, SEXP _colnames, SEXP _iter
 			SET_STRING_ELT(col_names, num_interv_cols + num_exprs, Rf_mkChar("intervalID"));
 
             runprotect(2); // col_names, ids
+
+			if (profile) {
+				auto t_end = std::chrono::steady_clock::now();
+				double gather_ms = std::chrono::duration<double, std::milli>(t_assemble_start - t_gather_start).count();
+				double assemble_ms = std::chrono::duration<double, std::milli>(t_end - t_assemble_start).count();
+				log_gextract_timing("parent_gather_ms", gather_ms);
+				log_gextract_timing("parent_assemble_ms", assemble_ms);
+			}
             rreturn(answer);
 		}
 	} catch (TGLException &e) {

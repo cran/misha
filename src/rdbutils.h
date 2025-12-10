@@ -54,6 +54,16 @@ static inline MISHA_MAYBE_UNUSED int clock_gettime(int clk_id, struct timespec *
 #include <unistd.h>
 #include <sys/types.h>
 
+// Forward declare MultitaskingMode enum before including rdbinterval.h
+// since rdbinterval.h needs to use this type
+namespace rdb {
+	// Multitasking execution modes
+	enum MultitaskingMode : int {
+		MT_MODE_SINGLE = 0,   // Single-threaded with unlimited heap
+		MT_MODE_MMAP = 1      // Fast path with fixed mmap buffer (fork-based parallelism)
+	};
+}
+
 #include "rdbinterval.h"
 #include "Thread.h"
 
@@ -64,6 +74,17 @@ static inline MISHA_MAYBE_UNUSED int clock_gettime(int clk_id, struct timespec *
 #include <Rinternals.h>
 #include <Rinterface.h>
 #include <Rversion.h>
+
+// Undefine R macros that conflict with C++ standard library
+#ifdef length
+#undef length
+#endif
+#ifdef error
+#undef error
+#endif
+#ifdef warning
+#undef warning
+#endif
 
 #define MISHA_PRENV(x) TAG(x)
 #define MISHA_PRVALUE(x) CAR(x)
@@ -145,6 +166,9 @@ const char *get_groot(SEXP envir);
 const char *get_gwd(SEXP envir);
 
 const char *get_glib_dir(SEXP envir);
+
+// Helper function to check if database is in indexed format
+bool is_db_indexed(SEXP envir);
 
 inline bool is_R_var_char(char c) { return isalnum(c) || c == '_' || c == '.'; }
 

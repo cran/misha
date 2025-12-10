@@ -130,6 +130,9 @@ public:
 	float get_log_prob(char c) const {
 		return(m_logp[encode(c)]);
 	}
+	float get_log_prob_from_code(int code) const {
+		return m_logp[code];
+	}
 
 	float get_avg_log_prob() const {
 		return((m_logp[0]+m_logp[1]+m_logp[2]+m_logp[3])/4);
@@ -226,6 +229,8 @@ public:
     void integrate_like_seg(const char *min_i, const char *max_i, float &energy) const;
 	void integrate_like(const string &target, float &energy, vector<float> *spat_dist = 0) const;
 	void integrate_energy(const string &target, float &energy, vector<float> &spat_func, int spat_bin_size) const;
+	void integrate_energy_logspat(const string &target, float &energy, vector<float> &spat_log_func, int spat_bin_size) const;
+	void integrate_energy_max_logspat(const string &target, float &energy, vector<float> &spat_log_func, int spat_bin_size) const;
 	float get_max_ll() const;
 
 	void calc_like(const std::string &target, float &logp) const;
@@ -238,6 +243,9 @@ public:
 
 	void normalize();
 	void normalize_logs();
+
+	// Add uniform Dirichlet prior and renormalize each position
+	void add_dirichlet_prior(float prior);
 
 	void count(string::const_iterator seq, float weight = 1, int dir = 1);
 	void count_weighted(const string &target, vector<float> &wgts,

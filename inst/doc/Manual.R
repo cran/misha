@@ -9,6 +9,24 @@ library(misha)
 gdb.init_examples()
 
 ## ----eval=FALSE---------------------------------------------------------------
+# # Convert a track to indexed format
+# gtrack.convert_to_indexed("my_track")
+# 
+# # Check track format
+# info <- gtrack.info("my_track")
+# print(info$format) # "indexed" or "per-chromosome"
+
+## ----eval=FALSE---------------------------------------------------------------
+# # Convert 1D interval set to indexed format
+# gintervals.convert_to_indexed("my_intervals")
+# 
+# # Convert 2D interval set to indexed format
+# gintervals.2d.convert_to_indexed("my_2d_intervals")
+# 
+# # Convert and remove old per-chromosome files
+# gintervals.convert_to_indexed("my_intervals", remove.old = TRUE)
+
+## ----eval=FALSE---------------------------------------------------------------
 # # 'annotations' is an intervals set saved in Genomic Database
 # gintervals.intersect("annotations", gintervals(2))
 
@@ -33,6 +51,19 @@ gdb.init_examples()
 # gvtrack.create("myvtrack", "annotations", "distance")
 # intervs <- gscreen("dense_track > 0.45")
 # gextract("myvtrack", .misha$ALLGENOME, iterator = intervs)
+
+## ----eval=FALSE---------------------------------------------------------------
+# # Create a data frame with intervals and numeric values
+# intervals_with_values <- data.frame(
+#     chrom = "chr1",
+#     start = c(100, 300, 500),
+#     end = c(200, 400, 600),
+#     score = c(10, 20, 30)
+# )
+# 
+# # Use as value-based sparse track
+# gvtrack.create("myvtrack", intervals_with_values, "avg")
+# gvtrack.create("myvtrack_max", intervals_with_values, "max")
 
 ## ----eval = FALSE-------------------------------------------------------------
 # options(gbuf.size = 1)

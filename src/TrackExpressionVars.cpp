@@ -1,6 +1,8 @@
 #include <cstdint>
 #include <cmath>
 #include <unistd.h>
+#include <unordered_map>
+#include <unordered_set>
 
 #include "rdbutils.h"
 
@@ -17,14 +19,35 @@
 #include "GenomeTrackRects.h"
 #include "GenomeTrackSparse.h"
 #include "TrackExpressionVars.h"
+#include "TrackExpressionParams.h"
 #include "GenomeSeqFetch.h"
+#include "TrackVarProcessor.h"
+#include "IntervVarProcessor.h"
+#include "ValueVarProcessor.h"
+#include "SequenceVarProcessor.h"
 
 const char *TrackExpressionVars::Track_var::FUNC_NAMES[TrackExpressionVars::Track_var::NUM_FUNCS] = {
 	"avg", "min", "max", "nearest", "stddev", "sum", "quantile",
 	"global.percentile", "global.percentile.min", "global.percentile.max",
-	"weighted.sum", "area", "pwm", "pwm.max", "pwm.max.pos", "kmer.count", "kmer.frac"};
+	"weighted.sum", "area", "pwm", "pwm.max", "pwm.max.pos", "pwm.count", "kmer.count", "kmer.frac",
+    "masked.count", "masked.frac",
+    "max.pos.abs", "max.pos.relative", "min.pos.abs", "min.pos.relative",
+    "exists", "size", "sample", "sample.pos.abs", "sample.pos.relative",
+    "first", "first.pos.abs", "first.pos.relative", "last", "last.pos.abs", "last.pos.relative"};
 
-const char *TrackExpressionVars::Interv_var::FUNC_NAMES[TrackExpressionVars::Interv_var::NUM_FUNCS] = { "distance", "distance.center", "coverage" };
+const char *TrackExpressionVars::Interv_var::FUNC_NAMES[TrackExpressionVars::Interv_var::NUM_FUNCS] = { "distance", "distance.center", "distance.edge", "coverage", "neighbor.count" };
+
+const char *TrackExpressionVars::Value_var::FUNC_NAMES[TrackExpressionVars::Value_var::NUM_FUNCS] = {
+	"avg", "min", "max", "stddev", "sum", "quantile",
+	"nearest",
+	"exists", "size",
+	"first", "last", "sample",
+	"first.pos.abs", "first.pos.relative",
+	"last.pos.abs", "last.pos.relative",
+	"sample.pos.abs", "sample.pos.relative",
+	"min.pos.abs", "min.pos.relative",
+	"max.pos.abs", "max.pos.relative"
+};
 
 using namespace rdb;
 
@@ -36,6 +59,11 @@ TrackExpressionVars::TrackExpressionVars(rdb::IntervUtils &iu) :
 	m_imdfs2d.reserve(10000);
 	m_track_n_imdfs.reserve(10000);
 	m_groot = get_groot(m_iu.get_env());
+	m_shared_seqfetch.set_seqdir(m_groot + "/seq");
+	m_track_processor = std::make_unique<TrackVarProcessor>(iu);
+	m_interv_processor = std::make_unique<IntervVarProcessor>(iu);
+	m_value_processor = std::make_unique<ValueVarProcessor>(iu);
+	m_sequence_processor = std::make_unique<SequenceVarProcessor>(iu, m_shared_seqfetch);
 }
 
 TrackExpressionVars::~TrackExpressionVars()
@@ -43,6 +71,8 @@ TrackExpressionVars::~TrackExpressionVars()
 	for (Track_vars::iterator ivar = m_track_vars.begin(); ivar != m_track_vars.end(); ivar++)
 		runprotect(ivar->rvar);
 	for (Interv_vars::iterator ivar = m_interv_vars.begin(); ivar != m_interv_vars.end(); ivar++)
+		runprotect(ivar->rvar);
+	for (Value_vars::iterator ivar = m_value_vars.begin(); ivar != m_value_vars.end(); ivar++)
 		runprotect(ivar->rvar);
 	for (Track_n_imdfs::iterator itrack_n_imdf = m_track_n_imdfs.begin(); itrack_n_imdf != m_track_n_imdfs.end(); ++itrack_n_imdf)
 		delete itrack_n_imdf->track;
@@ -117,9 +147,11 @@ void TrackExpressionVars::parse_exprs(const vector<string> &track_exprs)
 
 	for (Interv_vars::iterator ivar = m_interv_vars.begin(); ivar != m_interv_vars.end(); ++ivar) {
 		ivar->siinterv = ivar->sintervs.begin();
-		if (ivar->val_func == Interv_var::DIST)
+		if (ivar->val_func == Interv_var::DIST || ivar->val_func == Interv_var::DIST_EDGE || ivar->val_func == Interv_var::NEIGHBOR_COUNT)
 			ivar->eiinterv = ivar->eintervs.begin();
 	}
+
+	// Value vars don't need initialization - they use track objects
 }
 
 void TrackExpressionVars::parse_imdf(SEXP rvtrack, const string &vtrack, Iterator_modifier1D *imdf1d, Iterator_modifier2D *imdf2d)
@@ -272,6 +304,69 @@ TrackExpressionVars::Track_n_imdf &TrackExpressionVars::add_track_n_imdf(const s
 	return track_n_imdf;
 }
 
+void TrackExpressionVars::attach_filter_to_var(SEXP rvtrack, const string &vtrack, Track_var &var)
+{
+	// Check for filter field in rvtrack
+	SEXP rfilter = get_rvector_col(rvtrack, "filter", vtrack.c_str(), false);
+
+	if (Rf_isNull(rfilter) || !Rf_isString(rfilter) || Rf_length(rfilter) != 1) {
+		var.filter = nullptr;
+		return;
+	}
+
+	// Get filter key
+	const char *filter_key = CHAR(STRING_ELT(rfilter, 0));
+
+	// Look up filter in registry
+	var.filter = FilterRegistry::instance().get(filter_key);
+
+	if (var.filter == nullptr) {
+		verror("Virtual track %s: filter with key '%s' not found in registry", vtrack.c_str(), filter_key);
+	}
+}
+
+void TrackExpressionVars::attach_filter_to_var(SEXP rvtrack, const string &vtrack, Interv_var &var)
+{
+	// Check for filter field in rvtrack
+	SEXP rfilter = get_rvector_col(rvtrack, "filter", vtrack.c_str(), false);
+
+	if (Rf_isNull(rfilter) || !Rf_isString(rfilter) || Rf_length(rfilter) != 1) {
+		var.filter = nullptr;
+		return;
+	}
+
+	// Get filter key
+	const char *filter_key = CHAR(STRING_ELT(rfilter, 0));
+
+	// Look up filter in registry
+	var.filter = FilterRegistry::instance().get(filter_key);
+
+	if (var.filter == nullptr) {
+		verror("Virtual track %s: filter with key '%s' not found in registry", vtrack.c_str(), filter_key);
+	}
+}
+
+void TrackExpressionVars::attach_filter_to_var(SEXP rvtrack, const string &vtrack, Value_var &var)
+{
+	// Check for filter field in rvtrack
+	SEXP rfilter = get_rvector_col(rvtrack, "filter", vtrack.c_str(), false);
+
+	if (Rf_isNull(rfilter) || !Rf_isString(rfilter) || Rf_length(rfilter) != 1) {
+		var.filter = nullptr;
+		return;
+	}
+
+	// Get filter key
+	const char *filter_key = CHAR(STRING_ELT(rfilter, 0));
+
+	// Look up filter in registry
+	var.filter = FilterRegistry::instance().get(filter_key);
+
+	if (var.filter == nullptr) {
+		verror("Virtual track %s: filter with key '%s' not found in registry", vtrack.c_str(), filter_key);
+	}
+}
+
 void TrackExpressionVars::add_vtrack_var(const string &vtrack, SEXP rvtrack)
 {
 	// Check for existing track vars
@@ -288,79 +383,61 @@ void TrackExpressionVars::add_vtrack_var(const string &vtrack, SEXP rvtrack)
 			return;
 	}
 
+	// Check for existing value vars
+	for (Value_vars::const_iterator ivar = m_value_vars.begin(); ivar != m_value_vars.end(); ++ivar)
+	{
+		if (ivar->var_name == vtrack)
+			return;
+	}
+
 	// First check if this is a PWM function
 	SEXP rfunc = get_rvector_col(rvtrack, "func", vtrack.c_str(), false);
     if (!Rf_isNull(rfunc) && Rf_isString(rfunc)) {
         string func = CHAR(STRING_ELT(rfunc, 0));
         transform(func.begin(), func.end(), func.begin(), ::tolower);
         
-        if (func == "pwm" || func == "pwm.max" || func == "pwm.max.pos") {
+        if (func == "pwm" || func == "pwm.max" || func == "pwm.max.pos" || func == "pwm.count") {
             // Create the Track_var without a Track_n_imdf
             m_track_vars.push_back(Track_var());
             Track_var &var = m_track_vars.back();
             var.var_name = vtrack;
-            var.val_func = (func == "pwm" ? Track_var::PWM : func == "pwm.max" ? Track_var::PWM_MAX : Track_var::PWM_MAX_POS);
+            var.val_func = (func == "pwm" ? Track_var::PWM :
+                           func == "pwm.max" ? Track_var::PWM_MAX :
+                           func == "pwm.max.pos" ? Track_var::PWM_MAX_POS :
+                           Track_var::PWM_COUNT);
             var.track_n_imdf = nullptr;  // No track needed for PWM
             var.seq_imdf1d = nullptr;
             
             SEXP rparams = get_rvector_col(rvtrack, "params", vtrack.c_str(), false);
-			if (!Rf_isNewList(rparams))	{
-				verror("Virtual track %s: PWM functions require a list parameter with pssm matrix", vtrack.c_str());
-			}
 
-			// Get PSSM matrix from params
-			SEXP rpssm = VECTOR_ELT(rparams, findListElementIndex(rparams, "pssm"));
-			if (!Rf_isMatrix(rpssm)){
-				rdb::verror("Virtual track %s: PWM functions require a matrix parameter", vtrack.c_str());
-			}
+			// Parse PWM parameters using helper struct
+			TrackExprParams::PWMParams pwm_params = TrackExprParams::PWMParams::parse(rparams, vtrack);
 
-			// Get bidirect parameter
-			SEXP rbidirect = VECTOR_ELT(rparams, findListElementIndex(rparams, "bidirect"));
-			bool bidirect = true; // default value
-			if (rbidirect != R_NilValue){
-				if (!Rf_isLogical(rbidirect))
-					rdb::verror("Virtual track %s: bidirect parameter must be logical", vtrack.c_str());
-				bidirect = LOGICAL(rbidirect)[0];
-			}
-
-			// Get extend parameter
-			SEXP rextend = VECTOR_ELT(rparams, findListElementIndex(rparams, "extend"));
-			bool extend = false;
-			if (rextend != R_NilValue){
-				if (!Rf_isLogical(rextend))
-					rdb::verror("Virtual track %s: extend parameter must be logical", vtrack.c_str());
-				extend = LOGICAL(rextend)[0];
-			}
-
-			// Get strand parameter (numeric)
-			SEXP rstrand = VECTOR_ELT(rparams, findListElementIndex(rparams, "strand"));
-			char strand = 0;
-			if (rstrand != R_NilValue){
-				if (!Rf_isReal(rstrand) || Rf_length(rstrand) != 1)
-					rdb::verror("Virtual track %s: strand parameter must be numeric", vtrack.c_str());
-				strand = (char)REAL(rstrand)[0];
-			}
-
-			// Create PSSM and initialize PWM scorer
-			DnaPSSM pssm = PWMScorer::create_pssm_from_matrix(rpssm);
-			pssm.set_bidirect(bidirect);
+			// Construct scorer with shared sequence fetcher for caching
 			var.pwm_scorer = std::make_unique<PWMScorer>(
-				pssm,
-				m_groot,
-				extend,
+				pwm_params.core.pssm,
+				&m_shared_seqfetch,
+				pwm_params.extend_flag,
 				func == "pwm" ? PWMScorer::TOTAL_LIKELIHOOD :
 				func == "pwm.max" ? PWMScorer::MAX_LIKELIHOOD :
-				PWMScorer::MAX_LIKELIHOOD_POS,
-				strand
+				func == "pwm.max.pos" ? PWMScorer::MAX_LIKELIHOOD_POS :
+				PWMScorer::MOTIF_COUNT,
+				static_cast<char>(pwm_params.core.strand_mode),
+				pwm_params.core.spat_factor,
+				pwm_params.core.spat_bin_size,
+				static_cast<float>(pwm_params.core.score_thresh)
 			);
 
             // Parse optional iterator modifier (sshift/eshift) for sequence-based vtracks
             Iterator_modifier1D imdf1d;
             parse_imdf(rvtrack, vtrack, &imdf1d, NULL);
             var.seq_imdf1d = add_imdf(imdf1d);
-            
+
             var.percentile = numeric_limits<double>::quiet_NaN();
             var.requires_pv = false;
+
+            // Attach filter if present
+            attach_filter_to_var(rvtrack, vtrack, var);
             return;
         } else if (func == "kmer.count" || func == "kmer.frac")	{
 			// Create the Track_var without a Track_n_imdf
@@ -373,57 +450,12 @@ void TrackExpressionVars::add_vtrack_var(const string &vtrack, SEXP rvtrack)
 			var.percentile = numeric_limits<double>::quiet_NaN();
 			SEXP rparams = get_rvector_col(rvtrack, "params", vtrack.c_str(), false);
 
-			if (Rf_isNull(rparams))
-				rdb::verror("Virtual track %s: function %s requires a parameter (kmer string)", vtrack.c_str(), func.c_str());
+			// Parse KMER parameters using helper struct
+			TrackExprParams::KmerParams kmer_params = TrackExprParams::KmerParams::parse(rparams, vtrack);
 
-			// Get extension parameter if exists, default to true (similar to PWM behavior)
-			bool extend = true;
-			char strand = 0;
-			if (Rf_isNewList(rparams))
-			{
-				// Handle as list params
-				SEXP rextend = VECTOR_ELT(rparams, findListElementIndex(rparams, "extend"));
-				if (rextend != R_NilValue)
-				{
-					if (!Rf_isLogical(rextend))
-						rdb::verror("Virtual track %s: extend parameter must be logical", vtrack.c_str());
-					extend = LOGICAL(rextend)[0];
-				}
-
-				// Extract kmer string from the list parameters
-				SEXP rkmer = VECTOR_ELT(rparams, findListElementIndex(rparams, "kmer"));
-				if (rkmer == R_NilValue || !Rf_isString(rkmer) || Rf_length(rkmer) != 1)
-					rdb::verror("Virtual track %s: invalid parameter used for function %s (must be a kmer string)",
-								vtrack.c_str(), func.c_str());
-
-				const char *kmer = CHAR(STRING_ELT(rkmer, 0));
-
-				SEXP rstrand = VECTOR_ELT(rparams, findListElementIndex(rparams, "strand"));
-				if (rstrand != R_NilValue)
-				{
-					if (!Rf_isNumeric(rstrand) || Rf_length(rstrand) != 1)
-						rdb::verror("Virtual track %s: strand parameter must be -1, 0, or 1", vtrack.c_str());
-					strand = (char)REAL(rstrand)[0];
-					if (strand != -1 && strand != 0 && strand != 1)
-						rdb::verror("Virtual track %s: strand parameter must be -1, 0, or 1", vtrack.c_str());
-				}
-
-				KmerCounter::CountMode mode = func == "kmer.count" ? KmerCounter::SUM : KmerCounter::FRACTION;
-				var.kmer_counter = std::make_unique<KmerCounter>(kmer, m_groot, mode, extend, strand);
-
-			}
-			else if (Rf_isString(rparams) && Rf_length(rparams) == 1)
-			{
-				// Handle direct string parameter (backward compatibility)
-				const char *kmer = CHAR(STRING_ELT(rparams, 0));
-				KmerCounter::CountMode mode = func == "kmer.count" ? KmerCounter::SUM : KmerCounter::FRACTION;
-				var.kmer_counter = std::make_unique<KmerCounter>(kmer, m_groot, mode, extend, strand);
-			}
-			else
-			{
-				rdb::verror("Virtual track %s: invalid parameter used for function %s (must be a kmer string)",
-							vtrack.c_str(), func.c_str());
-			}
+			KmerCounter::CountMode mode = func == "kmer.count" ? KmerCounter::SUM : KmerCounter::FRACTION;
+			var.kmer_counter = std::make_unique<KmerCounter>(kmer_params.kmer.c_str(), &m_shared_seqfetch, mode,
+			                                                   kmer_params.extend, kmer_params.strand);
 
             // Parse optional iterator modifier (sshift/eshift) for sequence-based vtracks
             Iterator_modifier1D imdf1d;
@@ -431,6 +463,35 @@ void TrackExpressionVars::add_vtrack_var(const string &vtrack, SEXP rvtrack)
             var.seq_imdf1d = add_imdf(imdf1d);
 
             var.requires_pv = false;
+
+            // Attach filter if present
+            attach_filter_to_var(rvtrack, vtrack, var);
+			return;
+		} else if (func == "masked.count" || func == "masked.frac") {
+			// Create the Track_var without a Track_n_imdf
+			m_track_vars.push_back(Track_var());
+			Track_var &var = m_track_vars.back();
+			var.var_name = vtrack;
+			var.val_func = func == "masked.count" ? Track_var::MASKED_COUNT : Track_var::MASKED_FRAC;
+			var.track_n_imdf = nullptr; // No track needed for masked counting
+			var.seq_imdf1d = nullptr;
+			var.percentile = numeric_limits<double>::quiet_NaN();
+
+			// No parameters needed for masked counting (unlike PWM/KMER)
+			// Just create the counter with the appropriate mode
+			MaskedBpCounter::CountMode mode =
+				func == "masked.count" ? MaskedBpCounter::COUNT : MaskedBpCounter::FRACTION;
+			var.masked_counter = std::make_unique<MaskedBpCounter>(&m_shared_seqfetch, mode);
+
+			// Parse optional iterator modifier (sshift/eshift) for sequence-based vtracks
+			Iterator_modifier1D imdf1d;
+			parse_imdf(rvtrack, vtrack, &imdf1d, NULL);
+			var.seq_imdf1d = add_imdf(imdf1d);
+
+			var.requires_pv = false;
+
+			// Attach filter if present
+			attach_filter_to_var(rvtrack, vtrack, var);
 			return;
 		}
 	}
@@ -459,6 +520,80 @@ void TrackExpressionVars::add_vtrack_var(const string &vtrack, SEXP rvtrack)
             }
         }
     }
+
+	// Check if rsrc is a data.frame with interval columns and value column (value-based vtrack)
+	if (TYPEOF(rsrc) == VECSXP) {  // data.frame is a VECSXP (list)
+		SEXP names = Rf_getAttrib(rsrc, R_NamesSymbol);
+		if (names != R_NilValue && TYPEOF(names) == STRSXP) {
+			// Check if it has chrom, start, end columns
+			bool has_chrom = false, has_start = false, has_end = false;
+			int value_idx = -1;
+
+			for (int i = 0; i < Rf_length(names); i++) {
+				const char *name = CHAR(STRING_ELT(names, i));
+				if (!strcmp(name, "chrom")) { has_chrom = true; }
+				else if (!strcmp(name, "start")) { has_start = true; }
+				else if (!strcmp(name, "end")) { has_end = true; }
+				// Look for numeric columns (not chrom/start/end/strand) as value columns
+				else if (strcmp(name, "strand") != 0 && strcmp(name, "intervalID") != 0) {
+					SEXP col = VECTOR_ELT(rsrc, i);
+					if (TYPEOF(col) == REALSXP || TYPEOF(col) == INTSXP) {
+						if (value_idx == -1) {  // Take first numeric column as value
+							value_idx = i;
+						}
+					}
+				}
+			}
+
+			// Check what function is requested
+			SEXP rfunc = get_rvector_col(rvtrack, "func", vtrack.c_str(), false);
+			string func;
+			if (Rf_isNull(rfunc))
+				func = Value_var::FUNC_NAMES[Value_var::AVG];
+			else {
+				func = CHAR(STRING_ELT(rfunc, 0));
+				transform(func.begin(), func.end(), func.begin(), ::tolower);
+			}
+
+			// Check if this is an interval-based function (distance, distance.center, coverage, neighbor.count)
+			bool is_interval_func = (!strcmp(func.c_str(), "distance") ||
+			                         !strcmp(func.c_str(), "distance.center") ||
+			                         !strcmp(func.c_str(), "coverage") ||
+			                         !strcmp(func.c_str(), "neighbor.count"));
+
+			// If we have interval columns AND a value column AND it's NOT an interval function,
+			// treat as value-based vtrack
+			if (has_chrom && has_start && has_end && value_idx >= 0 && !is_interval_func) {
+				GIntervals intervs;
+				vector<float> vals;
+
+				// Convert to intervals and extract values
+				m_iu.convert_rintervs(rsrc, &intervs, NULL);
+
+				// Extract values
+				SEXP value_col = VECTOR_ELT(rsrc, value_idx);
+				int n = Rf_length(value_col);
+				vals.reserve(n);
+
+				if (TYPEOF(value_col) == REALSXP) {
+					for (int i = 0; i < n; i++) {
+						vals.push_back(static_cast<float>(REAL(value_col)[i]));
+					}
+				} else if (TYPEOF(value_col) == INTSXP) {
+					for (int i = 0; i < n; i++) {
+						int ival = INTEGER(value_col)[i];
+						if (ival == NA_INTEGER)
+							vals.push_back(numeric_limits<float>::quiet_NaN());
+						else
+							vals.push_back(static_cast<float>(ival));
+					}
+				}
+
+				add_vtrack_var_src_value(rvtrack, vtrack, intervs, vals);
+				return;
+			}
+		}
+	}
 
 	GIntervals intervs1d;
 	GIntervals2D intervs2d;
@@ -606,16 +741,34 @@ TrackExpressionVars::Track_var &TrackExpressionVars::add_vtrack_var_src_track(SE
 				if (var.percentile < 0 || var.percentile > 1)
 					verror("Virtual track %s: parameter (percentile) used for function %s is out of range", vtrack.c_str(), func.c_str());
 				
-			} else	if (ifunc == Track_var::PWM || ifunc == Track_var::PWM_MAX || ifunc == Track_var::PWM_MAX_POS) {
+			} else	if (ifunc == Track_var::PWM || ifunc == Track_var::PWM_MAX || ifunc == Track_var::PWM_MAX_POS || ifunc == Track_var::PWM_COUNT) {
 				var.percentile = numeric_limits<double>::quiet_NaN();
-				if (!Rf_isMatrix(rparams))
-					verror("Virtual track %s: PWM functions require a matrix parameter", vtrack.c_str());
 
-				DnaPSSM pssm = PWMScorer::create_pssm_from_matrix(rparams);
+				TrackExprParams::PWMParams pwm_params = TrackExprParams::PWMParams::parse(rparams, vtrack);
+
+				// Read extend parameter from vtrack (overrides default)
+				SEXP rextend = get_rvector_col(rvtrack, "extend", vtrack.c_str(), false);
+				bool extend = true; // default value (matching constructor default)
+				if (!Rf_isNull(rextend)) {
+					if (!Rf_isLogical(rextend))
+						verror("Virtual track %s: extend parameter must be logical", vtrack.c_str());
+					extend = LOGICAL(rextend)[0];
+				}
+				pwm_params.extend_flag = extend;
+				pwm_params.core.extend = extend ? std::max(0, (int)pwm_params.core.pssm.size() - 1) : 0;
+
 				var.pwm_scorer = std::make_unique<PWMScorer>(
-					pssm,
-					m_groot,
-					ifunc == Track_var::PWM ? PWMScorer::TOTAL_LIKELIHOOD : PWMScorer::MAX_LIKELIHOOD);
+					pwm_params.core.pssm,
+					&m_shared_seqfetch,
+					pwm_params.extend_flag,
+					ifunc == Track_var::PWM ? PWMScorer::TOTAL_LIKELIHOOD :
+					ifunc == Track_var::PWM_MAX ? PWMScorer::MAX_LIKELIHOOD :
+					ifunc == Track_var::PWM_MAX_POS ? PWMScorer::MAX_LIKELIHOOD_POS :
+					PWMScorer::MOTIF_COUNT,
+					static_cast<char>(pwm_params.core.strand_mode),
+					pwm_params.core.spat_factor,
+					pwm_params.core.spat_bin_size,
+					static_cast<float>(pwm_params.core.score_thresh));
 			} else if(ifunc == Track_var::KMER_COUNT || ifunc == Track_var::KMER_FRAC) {
 				if (Rf_isNull(rparams)){
 					verror("Virtual track %s: function %s requires a parameter (kmer string)", vtrack.c_str(), func.c_str());
@@ -625,11 +778,30 @@ TrackExpressionVars::Track_var &TrackExpressionVars::add_vtrack_var_src_track(SE
 					verror("Virtual track %s: function %s requires a string parameter", vtrack.c_str(), func.c_str());
 				}
 				var.percentile = numeric_limits<double>::quiet_NaN();
+
+				// Read extend parameter from vtrack
+				SEXP rextend = get_rvector_col(rvtrack, "extend", vtrack.c_str(), false);
+				bool extend = true; // default value (matching constructor default)
+				if (!Rf_isNull(rextend)) {
+					if (!Rf_isLogical(rextend))
+						verror("Virtual track %s: extend parameter must be logical", vtrack.c_str());
+					extend = LOGICAL(rextend)[0];
+				}
+
+				// Read strand parameter from vtrack
+				SEXP rstrand = get_rvector_col(rvtrack, "strand", vtrack.c_str(), false);
+				char strand = 0; // default value (both strands)
+				if (!Rf_isNull(rstrand)) {
+					if (!Rf_isReal(rstrand) || Rf_length(rstrand) != 1)
+						verror("Virtual track %s: strand parameter must be numeric", vtrack.c_str());
+					strand = (char)REAL(rstrand)[0];
+				}
+
 				// Get the kmer string
 				const char *kmer = CHAR(STRING_ELT(rparams, 0));
 				KmerCounter::CountMode mode = ifunc == Track_var::KMER_COUNT ? KmerCounter::SUM : KmerCounter::FRACTION;
 
-				var.kmer_counter = std::make_unique<KmerCounter>(kmer, m_groot, mode);							
+				var.kmer_counter = std::make_unique<KmerCounter>(kmer, &m_shared_seqfetch, mode, extend, strand);
 				break;
 
 			} else{
@@ -646,6 +818,15 @@ TrackExpressionVars::Track_var &TrackExpressionVars::add_vtrack_var_src_track(SE
 
 	if (ifunc >= Track_var::NUM_FUNCS)
         verror("Virtual track %s: invalid function %s used for a virtual track", vtrack.c_str(), func.c_str());
+
+	// Attach filter if present
+	// Check if filter is being applied to 2D track
+	SEXP rfilter = get_rvector_col(rvtrack, "filter", vtrack.c_str(), false);
+	if (!Rf_isNull(rfilter) && GenomeTrack::is_2d(track_type)) {
+		verror("Virtual track %s: Filters are not yet supported for 2D tracks", vtrack.c_str());
+	}
+
+	attach_filter_to_var(rvtrack, vtrack, var);
 
 	return var;
 }
@@ -719,6 +900,18 @@ TrackExpressionVars::Interv_var &TrackExpressionVars::add_vtrack_var_src_interv(
 			if (iinterv->do_touch(*(iinterv - 1)))
 				verror("Virtual track %s: intervals are overlapping and hence incompatible with %s function", vtrack.c_str(), func.c_str());
 		}
+	} else if (!strcmp(func.c_str(), Interv_var::FUNC_NAMES[Interv_var::DIST_EDGE])) {
+		var.val_func = Interv_var::DIST_EDGE;
+
+		if (!Rf_isNull(rparams))
+			verror("Virtual track %s: function %s does not accept any parameters", vtrack.c_str(), func.c_str());
+
+		var.dist_margin = 0.;
+		var.sintervs.swap(intervs1d);
+		var.sintervs.sort();
+		var.eintervs = var.sintervs;
+		var.eintervs.sort(GIntervals::compare_by_end_coord);
+		// Overlapping intervals are allowed for edge-to-edge distance
 	} else if (!strcmp(func.c_str(), Interv_var::FUNC_NAMES[Interv_var::COVERAGE])) {
         var.val_func = Interv_var::COVERAGE;
 
@@ -730,9 +923,228 @@ TrackExpressionVars::Interv_var &TrackExpressionVars::add_vtrack_var_src_interv(
         var.sintervs.sort();
         var.sintervs.unify_overlaps(); // Unify overlaps since we want total coverage
 	
+	} else if (!strcmp(func.c_str(), Interv_var::FUNC_NAMES[Interv_var::NEIGHBOR_COUNT])) {
+		var.val_func = Interv_var::NEIGHBOR_COUNT;
+
+		double dist_margin = 0;
+
+		if (!Rf_isNull(rparams)) {
+			if (Rf_isReal(rparams) && Rf_length(rparams) == 1)
+				dist_margin = REAL(rparams)[0];
+			else if (Rf_isInteger(rparams) && Rf_length(rparams) == 1)
+				dist_margin = INTEGER(rparams)[0];
+			else
+				verror("Virtual track %s: invalid parameters used for function %s", vtrack.c_str(), func.c_str());
+		}
+		if (dist_margin < 0)
+			verror("Virtual track %s, function %s: distance cannot be a negative number", vtrack.c_str(), func.c_str());
+
+		var.dist_margin = dist_margin;
+		var.sintervs.swap(intervs1d);
+		var.sintervs.sort();
+
+		const GenomeChromKey &chromkey = m_iu.get_chromkey();
+
+		// Create expanded intervals but do NOT unify them
+		var.eintervs.clear();
+		var.eintervs.reserve(var.sintervs.size());
+		for (const auto &interv : var.sintervs) {
+			double expanded_start = static_cast<double>(interv.start) - var.dist_margin;
+			double expanded_end = static_cast<double>(interv.end) + var.dist_margin;
+
+			int64_t new_start = expanded_start < 0.0 ? 0 : static_cast<int64_t>(std::floor(expanded_start));
+			uint64_t chrom_size = chromkey.get_chrom_size(interv.chromid);
+			double chrom_size_d = static_cast<double>(chrom_size);
+			if (expanded_end > chrom_size_d)
+				expanded_end = chrom_size_d;
+
+			int64_t new_end = static_cast<int64_t>(std::ceil(expanded_end));
+			if (new_end < new_start)
+				new_end = new_start;
+
+			var.eintervs.push_back(GInterval(interv.chromid, new_start, new_end, interv.strand));
+		}
+		var.eintervs.sort();
 	} else {
 		verror("Virtual track %s: invalid function %s used with intervals", vtrack.c_str(), func.c_str());
 	}
+
+	// Attach filter if present
+	attach_filter_to_var(rvtrack, vtrack, var);
+
+	return var;
+}
+
+TrackExpressionVars::Value_var &TrackExpressionVars::add_vtrack_var_src_value(SEXP rvtrack, const string &vtrack, GIntervals &intervs, vector<float> &vals)
+{
+	if (intervs.size() != vals.size())
+		verror("Virtual track %s: number of intervals (%zu) does not match number of values (%zu)", vtrack.c_str(), intervs.size(), vals.size());
+
+	m_value_vars.push_back(Value_var());
+	Value_var &var = m_value_vars.back();
+
+	var.var_name = vtrack;
+	Iterator_modifier1D imdf1d;
+	parse_imdf(rvtrack, vtrack, &imdf1d, NULL);
+	var.imdf1d = add_imdf(imdf1d);
+
+	SEXP rfunc = get_rvector_col(rvtrack, "func", vtrack.c_str(), false);
+	SEXP rparams = get_rvector_col(rvtrack, "params", vtrack.c_str(), false);
+	string func;
+
+	if (Rf_isNull(rfunc))
+		func = Value_var::FUNC_NAMES[Value_var::AVG];
+	else {
+		func = CHAR(STRING_ELT(rfunc, 0));
+		transform(func.begin(), func.end(), func.begin(), ::tolower);
+	}
+
+	// Parse function name
+	bool func_found = false;
+	for (int i = 0; i < Value_var::NUM_FUNCS; i++) {
+		if (!strcmp(func.c_str(), Value_var::FUNC_NAMES[i])) {
+			var.val_func = static_cast<Value_var::Val_func>(i);
+			func_found = true;
+			break;
+		}
+	}
+
+	if (!func_found)
+		verror("Virtual track %s: invalid function %s used with value-based intervals", vtrack.c_str(), func.c_str());
+
+	// Parse percentile parameter for quantile function
+	var.percentile = 0;
+	if (var.val_func == Value_var::QUANTILE) {
+		if (Rf_isNull(rparams))
+			verror("Virtual track %s: function %s requires percentile parameter", vtrack.c_str(), func.c_str());
+
+		if (Rf_isReal(rparams) && Rf_length(rparams) == 1)
+			var.percentile = REAL(rparams)[0];
+		else if (Rf_isInteger(rparams) && Rf_length(rparams) == 1)
+			var.percentile = INTEGER(rparams)[0];
+		else
+			verror("Virtual track %s: invalid percentile parameter for function %s", vtrack.c_str(), func.c_str());
+
+		if (var.percentile < 0 || var.percentile > 1)
+			verror("Virtual track %s: percentile must be between 0 and 1, got %g", vtrack.c_str(), var.percentile);
+	} else {
+		if (!Rf_isNull(rparams))
+			verror("Virtual track %s: function %s does not accept any parameters", vtrack.c_str(), func.c_str());
+	}
+
+	// Sort intervals and values together
+	// Create pairs, sort, then separate
+	vector<pair<GInterval, float>> paired;
+	paired.reserve(intervs.size());
+	for (size_t i = 0; i < intervs.size(); i++) {
+		paired.push_back(make_pair(intervs[i], vals[i]));
+	}
+
+	sort(paired.begin(), paired.end(), [](const pair<GInterval, float> &a, const pair<GInterval, float> &b) {
+		return a.first < b.first;
+	});
+
+	// Separate back into sorted intervals and values
+	GIntervals sorted_intervals;
+	vector<float> sorted_values;
+	sorted_intervals.reserve(paired.size());
+	sorted_values.reserve(paired.size());
+	for (size_t i = 0; i < paired.size(); i++) {
+		sorted_intervals.push_back(paired[i].first);
+		sorted_values.push_back(paired[i].second);
+	}
+
+	// Check for overlaps (Phase 1: error only)
+	for (size_t i = 1; i < sorted_intervals.size(); i++) {
+		if (sorted_intervals[i-1].chromid == sorted_intervals[i].chromid &&
+		    sorted_intervals[i-1].end > sorted_intervals[i].start) {
+			verror("Virtual track %s: overlapping intervals detected. Interval at position %zu [%s:%ld-%ld] overlaps with previous interval [%s:%ld-%ld]. "
+			       "Value-based virtual tracks do not support overlapping intervals.",
+			       vtrack.c_str(), i,
+			       m_iu.get_chromkey().id2chrom(sorted_intervals[i].chromid).c_str(),
+			       sorted_intervals[i].start, sorted_intervals[i].end,
+			       m_iu.get_chromkey().id2chrom(sorted_intervals[i-1].chromid).c_str(),
+			       sorted_intervals[i-1].start, sorted_intervals[i-1].end);
+		}
+	}
+
+	// Create the track object
+	var.track = make_shared<GenomeTrackInMemory>();
+
+	// Determine chromid (assuming all intervals are on same chrom, or 0 if empty)
+	int chromid = sorted_intervals.empty() ? 0 : sorted_intervals.front().chromid;
+
+	// Initialize track with data
+	var.track->init_from_data(sorted_intervals, sorted_values, chromid);
+
+	// Register required function
+	switch (var.val_func) {
+		case Value_var::AVG:
+			var.track->register_function(GenomeTrack1D::AVG);
+			var.track->register_function(GenomeTrack1D::SIZE);
+			break;
+		case Value_var::MIN:
+			var.track->register_function(GenomeTrack1D::MIN);
+			break;
+		case Value_var::MAX:
+			var.track->register_function(GenomeTrack1D::MAX);
+			break;
+		case Value_var::SUM:
+			var.track->register_function(GenomeTrack1D::SUM);
+			break;
+		case Value_var::STDDEV:
+			var.track->register_function(GenomeTrack1D::STDDEV);
+			var.track->register_function(GenomeTrack1D::SIZE);
+			break;
+		case Value_var::QUANTILE:
+			var.track->register_quantile(10000, 1000, 1000);
+			break;
+		case Value_var::NEAREST:
+			var.track->register_function(GenomeTrack1D::NEAREST);
+			break;
+		case Value_var::EXISTS:
+			var.track->register_function(GenomeTrack1D::EXISTS);
+			break;
+		case Value_var::SIZE:
+			var.track->register_function(GenomeTrack1D::SIZE);
+			break;
+		case Value_var::FIRST:
+			var.track->register_function(GenomeTrack1D::FIRST);
+			break;
+		case Value_var::LAST:
+			var.track->register_function(GenomeTrack1D::LAST);
+			break;
+		case Value_var::SAMPLE:
+			var.track->register_function(GenomeTrack1D::SAMPLE);
+			break;
+		case Value_var::FIRST_POS_ABS:
+		case Value_var::FIRST_POS_REL:
+			var.track->register_function(GenomeTrack1D::FIRST_POS);
+			break;
+		case Value_var::LAST_POS_ABS:
+		case Value_var::LAST_POS_REL:
+			var.track->register_function(GenomeTrack1D::LAST_POS);
+			break;
+		case Value_var::SAMPLE_POS_ABS:
+		case Value_var::SAMPLE_POS_REL:
+			var.track->register_function(GenomeTrack1D::SAMPLE_POS);
+			break;
+		case Value_var::MIN_POS_ABS:
+		case Value_var::MIN_POS_REL:
+			var.track->register_function(GenomeTrack1D::MIN_POS);
+			break;
+		case Value_var::MAX_POS_ABS:
+		case Value_var::MAX_POS_REL:
+			var.track->register_function(GenomeTrack1D::MAX_POS);
+			break;
+		case Value_var::NUM_FUNCS:
+		default:
+			// NUM_FUNCS is a sentinel value, not a valid function type
+			break;
+	}
+
+	// Attach filter if present
+	attach_filter_to_var(rvtrack, vtrack, var);
 
 	return var;
 }
@@ -740,8 +1152,8 @@ TrackExpressionVars::Interv_var &TrackExpressionVars::add_vtrack_var_src_interv(
 void TrackExpressionVars::register_track_functions()
 {
 	for (Track_vars::iterator ivar = m_track_vars.begin(); ivar != m_track_vars.end(); ++ivar) {
-		// Skip PWM variables since they don't have associated tracks
-        if (ivar->val_func == Track_var::PWM || ivar->val_func == Track_var::PWM_MAX || ivar->val_func == Track_var::PWM_MAX_POS || ivar->val_func == Track_var::KMER_COUNT || ivar->val_func == Track_var::KMER_FRAC) {
+		// Skip sequence-based variables since they don't have associated tracks
+        if (TrackExpressionVars::is_sequence_based_function(ivar->val_func)) {
             continue;
         }
 		GenomeTrack1D *track1d = GenomeTrack::is_1d(ivar->track_n_imdf->type) ? (GenomeTrack1D *)ivar->track_n_imdf->track : NULL;
@@ -769,6 +1181,18 @@ void TrackExpressionVars::register_track_functions()
 			else
 				track2d->register_function(GenomeTrack2D::MAX);
 			break;
+		case Track_var::MAX_POS_ABS:
+		case Track_var::MAX_POS_REL:
+			if (!track1d)
+				verror("vtrack functions 'max.pos.abs' and 'max.pos.relative' can only be used on 1D tracks");
+			track1d->register_function(GenomeTrack1D::MAX_POS);
+			break;
+		case Track_var::MIN_POS_ABS:
+		case Track_var::MIN_POS_REL:
+			if (!track1d)
+				verror("vtrack functions 'min.pos.abs' and 'min.pos.relative' can only be used on 1D tracks");
+			track1d->register_function(GenomeTrack1D::MIN_POS);
+			break;
 		case Track_var::REG_NEAREST:
 			track1d->register_function(GenomeTrack1D::NEAREST);
 			break;
@@ -787,15 +1211,54 @@ void TrackExpressionVars::register_track_functions()
 		case Track_var::OCCUPIED_AREA:
 			track2d->register_function(GenomeTrack2D::OCCUPIED_AREA);
 			break;
-		case Track_var::PWM:
-		case Track_var::PWM_MAX:
-		case Track_var::PWM_MAX_POS:
-		case Track_var::KMER_COUNT:
-		case Track_var::KMER_FRAC:
-			// PWM functions work directly on sequences, no need to register track functions
+		case Track_var::EXISTS:
+			if (!track1d)
+				verror("vtrack function 'exists' can only be used on 1D tracks");
+			track1d->register_function(GenomeTrack1D::EXISTS);
 			break;
+		case Track_var::SIZE:
+			if (!track1d)
+				verror("vtrack function 'size' can only be used on 1D tracks");
+			track1d->register_function(GenomeTrack1D::SIZE);
+			break;
+		case Track_var::SAMPLE:
+			if (!track1d)
+				verror("vtrack function 'sample' can only be used on 1D tracks");
+			track1d->register_function(GenomeTrack1D::SAMPLE);
+			break;
+		case Track_var::SAMPLE_POS_ABS:
+		case Track_var::SAMPLE_POS_REL:
+			if (!track1d)
+				verror("vtrack functions 'sample.pos.abs' and 'sample.pos.relative' can only be used on 1D tracks");
+			track1d->register_function(GenomeTrack1D::SAMPLE_POS);
+			break;
+		case Track_var::FIRST:
+			if (!track1d)
+				verror("vtrack function 'first' can only be used on 1D tracks");
+			track1d->register_function(GenomeTrack1D::FIRST);
+			break;
+		case Track_var::FIRST_POS_ABS:
+		case Track_var::FIRST_POS_REL:
+			if (!track1d)
+				verror("vtrack functions 'first.pos.abs' and 'first.pos.relative' can only be used on 1D tracks");
+			track1d->register_function(GenomeTrack1D::FIRST_POS);
+			break;
+		case Track_var::LAST:
+			if (!track1d)
+				verror("vtrack function 'last' can only be used on 1D tracks");
+			track1d->register_function(GenomeTrack1D::LAST);
+			break;
+		case Track_var::LAST_POS_ABS:
+		case Track_var::LAST_POS_REL:
+			if (!track1d)
+				verror("vtrack functions 'last.pos.abs' and 'last.pos.relative' can only be used on 1D tracks");
+			track1d->register_function(GenomeTrack1D::LAST_POS);
+			break;
+		// Sequence-based functions work directly on sequences, no need to register track functions
 		default:
-			verror("Unrecognized virtual track function");
+			if (!TrackExpressionVars::is_sequence_based_function((Track_var::Val_func)ivar->val_func))
+				verror("Unrecognized virtual track function");
+			break;
 		}
 
 		if (ivar->track_n_imdf->type == GenomeTrack::ARRAYS) {
@@ -814,8 +1277,8 @@ void TrackExpressionVars::init(const TrackExpressionIteratorBase &expr_itr)
 	// First validate iterator compatibility
 	for (Track_vars::const_iterator itrack_var = m_track_vars.begin(); itrack_var != m_track_vars.end(); ++itrack_var)
 	{
-	    // Skip iterator validation for PWM variables since they don't have tracks or imdf
-        if (itrack_var->val_func == Track_var::PWM || itrack_var->val_func == Track_var::PWM_MAX || itrack_var->val_func == Track_var::PWM_MAX_POS || itrack_var->val_func == Track_var::KMER_COUNT || itrack_var->val_func == Track_var::KMER_FRAC) {
+	    // Skip iterator validation for sequence-based variables since they don't have tracks or imdf
+        if (TrackExpressionVars::is_sequence_based_function(itrack_var->val_func)) {
             continue;
         }
 
@@ -852,8 +1315,8 @@ void TrackExpressionVars::init(const TrackExpressionIteratorBase &expr_itr)
 
 	for (Track_vars::const_iterator ivar = m_track_vars.begin(); ivar != m_track_vars.end(); ++ivar)
 	{
-		// Skip PWM tracks
-		if ((ivar->val_func == Track_var::PWM || ivar->val_func == Track_var::PWM_MAX || ivar->val_func == Track_var::PWM_MAX_POS || ivar->val_func == Track_var::KMER_COUNT || ivar->val_func == Track_var::KMER_FRAC))
+		// Skip sequence-based tracks
+		if (TrackExpressionVars::is_sequence_based_function(ivar->val_func))
 		{
 			continue;
 		}
@@ -985,29 +1448,36 @@ void TrackExpressionVars::define_r_vars(unsigned size)
 		Rf_defineVar(Rf_install(ivar->var_name.c_str()), ivar->rvar, m_iu.get_env());
 		ivar->var = REAL(ivar->rvar);
 	}
+	for (Value_vars::iterator ivar = m_value_vars.begin(); ivar != m_value_vars.end(); ivar++) {
+		rprotect(ivar->rvar = RSaneAllocVector(REALSXP, size));
+		Rf_defineVar(Rf_install(ivar->var_name.c_str()), ivar->rvar, m_iu.get_env());
+		ivar->var = REAL(ivar->rvar);
+	}
 }
 
 void TrackExpressionVars::start_chrom(const GInterval &interval)
 {
 	for (Track_n_imdfs::iterator itrack_n_imdf = m_track_n_imdfs.begin(); itrack_n_imdf != m_track_n_imdfs.end(); ++itrack_n_imdf)
 	{
-		// Skip track initialization for PWM-only tracks
-		bool is_pwm_track = false;
+		// Skip track initialization for sequence-based tracks
+		bool is_sequence_track = false;
 		for (Track_vars::iterator ivar = m_track_vars.begin(); ivar != m_track_vars.end(); ++ivar)
 		{
 			if (ivar->track_n_imdf == &(*itrack_n_imdf) &&
-				(ivar->val_func == Track_var::PWM || ivar->val_func == Track_var::PWM_MAX || ivar->val_func == Track_var::PWM_MAX_POS || ivar->val_func == Track_var::KMER_COUNT || ivar->val_func == Track_var::KMER_FRAC))
+				TrackExpressionVars::is_sequence_based_function(ivar->val_func))
 			{
-				is_pwm_track = true;
+				is_sequence_track = true;
 				break;
 			}
 		}
-		if (is_pwm_track)
+		if (is_sequence_track)
 			continue;
 
 		try
 		{
-			string filename(track2path(m_iu.get_env(), itrack_n_imdf->name) + "/" + GenomeTrack::get_1d_filename(m_iu.get_chromkey(), interval.chromid));
+			string track_dir = track2path(m_iu.get_env(), itrack_n_imdf->name);
+			string resolved = GenomeTrack::find_existing_1d_filename(m_iu.get_chromkey(), track_dir, interval.chromid);
+			string filename(track_dir + "/" + resolved);
 
 			delete itrack_n_imdf->track;
 			if (itrack_n_imdf->type == GenomeTrack::FIXED_BIN)
@@ -1036,6 +1506,13 @@ void TrackExpressionVars::start_chrom(const GInterval &interval)
 		}
 	}
 	register_track_functions();
+
+	// Invalidate PWM scorer caches on chromosome change
+	for (Track_vars::iterator ivar = m_track_vars.begin(); ivar != m_track_vars.end(); ++ivar) {
+		if (ivar->pwm_scorer) {
+			ivar->pwm_scorer->invalidate_cache();
+		}
+	}
 }
 
 void TrackExpressionVars::start_chrom(const GInterval2D &interval)
@@ -1053,7 +1530,9 @@ void TrackExpressionVars::start_chrom(const GInterval2D &interval)
 					verror("Internal error: no 2D to 1D conversion for track %s", itrack_n_imdf->name.c_str());
 
 				if (chromid != itrack_n_imdf->imdf1d->interval.chromid) {
-					string filename(track2path(m_iu.get_env(), itrack_n_imdf->name) + "/" + GenomeTrack::get_1d_filename(m_iu.get_chromkey(), chromid));
+					string track_dir = track2path(m_iu.get_env(), itrack_n_imdf->name);
+					string resolved = GenomeTrack::find_existing_1d_filename(m_iu.get_chromkey(), track_dir, chromid);
+					string filename(track_dir + "/" + resolved);
 
 					delete itrack_n_imdf->track;
 					if (itrack_n_imdf->type == GenomeTrack::FIXED_BIN) {
@@ -1089,6 +1568,13 @@ void TrackExpressionVars::start_chrom(const GInterval2D &interval)
 		}
 	}
 	register_track_functions();
+
+	// Invalidate PWM scorer caches on chromosome change
+	for (Track_vars::iterator ivar = m_track_vars.begin(); ivar != m_track_vars.end(); ++ivar) {
+		if (ivar->pwm_scorer) {
+			ivar->pwm_scorer->invalidate_cache();
+		}
+	}
 }
 
 void TrackExpressionVars::set_vars(const GInterval &interval, unsigned idx)
@@ -1126,17 +1612,18 @@ void TrackExpressionVars::set_vars(const GInterval2D &interval, const DiagonalBa
 
 void TrackExpressionVars::set_vars(unsigned idx)
 {
+	// Setup tracks (read intervals for non-sequence-based tracks)
 	for (Track_n_imdfs::iterator itrack_n_imdf = m_track_n_imdfs.begin(); itrack_n_imdf != m_track_n_imdfs.end(); ++itrack_n_imdf)
 	{
-		// Skip track setup for PWM-only tracks
-		Track_vars::iterator pwm_var = m_track_vars.begin();
-		for (; pwm_var != m_track_vars.end(); ++pwm_var)
+		// Skip track setup for sequence-based tracks
+		Track_vars::iterator seq_var = m_track_vars.begin();
+		for (; seq_var != m_track_vars.end(); ++seq_var)
 		{
-			if (pwm_var->track_n_imdf == &(*itrack_n_imdf) &&
-				(pwm_var->val_func == Track_var::PWM || pwm_var->val_func == Track_var::PWM_MAX || pwm_var->val_func == Track_var::PWM_MAX_POS || pwm_var->val_func == Track_var::KMER_COUNT || pwm_var->val_func == Track_var::KMER_FRAC))
+			if (seq_var->track_n_imdf == &(*itrack_n_imdf) &&
+				TrackExpressionVars::is_sequence_based_function(seq_var->val_func))
 				break;
 		}
-		if (pwm_var != m_track_vars.end())
+		if (seq_var != m_track_vars.end())
 			continue;
 		try {
 			if (GenomeTrack::is_2d(itrack_n_imdf->type)) {
@@ -1157,287 +1644,15 @@ void TrackExpressionVars::set_vars(unsigned idx)
 		}
 		}
 
-    for (Track_vars::iterator ivar = m_track_vars.begin(); ivar != m_track_vars.end(); ++ivar) {
-        if (ivar->val_func == Track_var::PWM || ivar->val_func == Track_var::PWM_MAX || ivar->val_func == Track_var::PWM_MAX_POS) {
-            // PWM scoring doesn't require track data. Use per-vtrack iterator-modified interval if present.
-            const GInterval &seq_interval = ivar->seq_imdf1d ? ivar->seq_imdf1d->interval : m_interval1d;
-            ivar->var[idx] = ivar->pwm_scorer->score_interval(seq_interval, m_iu.get_chromkey());
-            continue;
-        }
-        if (ivar->val_func == Track_var::KMER_COUNT || ivar->val_func == Track_var::KMER_FRAC)	{
-            // Kmer counting doesn't require track data. Use iterator-modified interval if present.
-            const GInterval &seq_interval = ivar->seq_imdf1d ? ivar->seq_imdf1d->interval : m_interval1d;
-            if (ivar->kmer_counter)	{
-                ivar->var[idx] = ivar->kmer_counter->score_interval(seq_interval, m_iu.get_chromkey());
-            } else{
-                ivar->var[idx] = std::numeric_limits<double>::quiet_NaN();
-            }
-            continue;
-        }
+	// Process sequence-based variables first (PWM, kmer, masked)
+	m_sequence_processor->process_sequence_vars(m_track_vars, m_interval1d, idx);
 
-		if (GenomeTrack::is_1d(ivar->track_n_imdf->type)) {
-			GenomeTrack1D &track = *(GenomeTrack1D *)ivar->track_n_imdf->track;
+	// Process regular track variables
+	m_track_processor->process_track_vars(m_track_vars, m_interval1d, m_interval2d, m_band, idx);
 
-			if (ivar->track_n_imdf->imdf1d && ivar->track_n_imdf->imdf1d->out_of_range)
-				ivar->var[idx] = numeric_limits<double>::quiet_NaN();
-			else {
-				switch (ivar->val_func) {
-				case Track_var::REG:
-				case Track_var::PV:
-					ivar->var[idx] = track.last_avg();
-					break;
-				case Track_var::REG_MIN:
-				case Track_var::PV_MIN:
-					ivar->var[idx] = track.last_min();
-					break;
-				case Track_var::REG_MAX:
-				case Track_var::PV_MAX:
-					ivar->var[idx] = track.last_max();
-					break;
-				case Track_var::REG_NEAREST:
-					ivar->var[idx] = track.last_nearest();
-					break;
-				case Track_var::STDDEV:
-					ivar->var[idx] = track.last_stddev();
-					break;
-				case Track_var::SUM:
-					ivar->var[idx] = track.last_sum();
-					break;
-				case Track_var::QUANTILE:
-					ivar->var[idx] = track.last_quantile(ivar->percentile);
-					break;
-				case Track_var::PWM_MAX:
-				case Track_var::PWM_MAX_POS:
-				case Track_var::PWM:
-				case Track_var::KMER_COUNT:
-				case Track_var::KMER_FRAC:
-					break;
-				default:
-					verror("Internal error: unsupported function %d", ivar->val_func);
-				}
+	// Process interval variables
+	m_interv_processor->process_interv_vars(m_interv_vars, m_interval1d, idx);
 
-				if (ivar->requires_pv) {
-					double val = ivar->var[idx];
-					if (!std::isnan(val)) {
-						int bin = ivar->pv_binned.binfinder.val2bin(val);
-						if (bin < 0) {
-							if (val <= ivar->pv_binned.binfinder.get_breaks().front())
-								ivar->var[idx] = ivar->pv_binned.bins[0];
-							else
-								ivar->var[idx] = 1.;
-						} else
-							ivar->var[idx] = ivar->pv_binned.bins[bin];
-					}
-				}
-			}
-		} else {
-			GenomeTrack2D &track = *(GenomeTrack2D *)ivar->track_n_imdf->track;
-
-			if (ivar->track_n_imdf->imdf2d && ivar->track_n_imdf->imdf2d->out_of_range)
-				ivar->var[idx] = numeric_limits<double>::quiet_NaN();
-			else {
-				switch (ivar->val_func) {
-				case Track_var::REG:
-					ivar->var[idx] = track.last_avg();
-					break;
-				case Track_var::REG_MIN:
-					ivar->var[idx] = track.last_min();
-					break;
-				case Track_var::REG_MAX:
-					ivar->var[idx] = track.last_max();
-					break;
-				case Track_var::WEIGHTED_SUM:
-					ivar->var[idx] = track.last_weighted_sum();
-					break;
-				case Track_var::OCCUPIED_AREA:
-					ivar->var[idx] = track.last_occupied_area();
-					break;
-				default:
-					verror("Internal error: unsupported function %d", ivar->val_func);
-				}
-			}
-		}
-	}
-
-	// set intervals variables
-	for (Interv_vars::iterator ivar = m_interv_vars.begin(); ivar != m_interv_vars.end(); ++ivar) {
-		if (ivar->val_func == Interv_var::DIST) {
-			// if iterator modifier exists, iterator intervals might not come sorted => perform a binary search
-			if (ivar->imdf1d) {
-				const GInterval &interval = ivar->imdf1d->interval;
-				double min_dist = numeric_limits<double>::max();
-				double dist;
-				int64_t coord = (interval.start + interval.end) / 2;
-				GIntervals::const_iterator iinterv = lower_bound(ivar->sintervs.begin(), ivar->sintervs.end(), interval, GIntervals::compare_by_start_coord);
-
-				if (iinterv != ivar->sintervs.end() && iinterv->chromid == interval.chromid)
-					min_dist = iinterv->dist2coord(coord, ivar->dist_margin);
-
-				if (iinterv != ivar->sintervs.begin() && (iinterv - 1)->chromid == interval.chromid) {
-					dist = (iinterv - 1)->dist2coord(coord, ivar->dist_margin);
-					if (fabs(min_dist) > fabs(dist))
-						min_dist = dist;
-				}
-
-				// if min_dist == double_max then we haven't found an interval with the same chromosome as the iterator interval =>
-				// we can skip the second binary search
-				if (min_dist == numeric_limits<double>::max())
-					ivar->var[idx] = numeric_limits<double>::quiet_NaN();
-				else {
-					iinterv = lower_bound(ivar->eintervs.begin(), ivar->eintervs.end(), interval, GIntervals::compare_by_end_coord);
-
-					if (iinterv != ivar->eintervs.end() && iinterv->chromid == interval.chromid) {
-						dist = iinterv->dist2coord(coord, ivar->dist_margin);
-						if (fabs(min_dist) > fabs(dist))
-							min_dist = dist;
-					}
-
-					if (iinterv != ivar->eintervs.begin() && (iinterv - 1)->chromid == interval.chromid) {
-						dist = (iinterv - 1)->dist2coord(coord, ivar->dist_margin);
-						if (fabs(min_dist) > fabs(dist))
-							min_dist = dist;
-					}
-
-					ivar->var[idx] = min_dist;
-				}
-			} else {
-				const GIntervals *pintervs[2] = { &ivar->sintervs, &ivar->eintervs };
-				GIntervals::const_iterator *piinterv[2] = { &ivar->siinterv, &ivar->eiinterv };
-				double dist[2] = { 0, 0 };
-				const GInterval &interval = m_interval1d;
-
-				for (int i = 0; i < 2; ++i) {
-					const GIntervals &intervs = *pintervs[i];
-					GIntervals::const_iterator &iinterv = *piinterv[i];
-
-					while (iinterv != intervs.end() && iinterv->chromid < interval.chromid)
-						++iinterv;
-
-					if (iinterv == intervs.end() || iinterv->chromid != interval.chromid)
-						dist[i] = numeric_limits<double>::quiet_NaN();
-					else {
-						int64_t coord = (interval.start + interval.end) / 2;
-						dist[i] = (double)iinterv->dist2coord(coord, ivar->dist_margin);
-						GIntervals::const_iterator iinterv_next = iinterv + 1;
-
-						while (iinterv_next != intervs.end() && iinterv_next->chromid == interval.chromid) {
-							double dist_next = iinterv_next->dist2coord(coord, ivar->dist_margin);
-
-							if (fabs(dist[i]) < fabs(dist_next))
-								break;
-
-							iinterv = iinterv_next;
-							dist[i] = dist_next;
-							++iinterv_next;
-						}
-					}
-				}
-
-				ivar->var[idx] = fabs(dist[0]) < fabs(dist[1]) ? dist[0] : dist[1];
-			}
-		} else if (ivar->val_func == Interv_var::DIST_CENTER) {
-			// if iterator modifier exists, iterator intervals might not come sorted => perform a binary search
-			if (ivar->imdf1d) {
-				int64_t coord = (ivar->imdf1d->interval.start + ivar->imdf1d->interval.end) / 2;
-				GInterval interval(ivar->imdf1d->interval.chromid, coord, coord + 1, 0);
-				GIntervals::const_iterator iinterv = lower_bound(ivar->sintervs.begin(), ivar->sintervs.end(), interval, GIntervals::compare_by_start_coord);
-				double dist = numeric_limits<double>::quiet_NaN();
-
-				ivar->var[idx] = numeric_limits<double>::quiet_NaN();
-
-				if (iinterv != ivar->sintervs.end() && iinterv->chromid == interval.chromid)
-					dist = iinterv->dist2center(coord);
-
-				if (dist != numeric_limits<double>::quiet_NaN() && iinterv != ivar->sintervs.begin() && (iinterv - 1)->chromid == interval.chromid)
-					dist = (iinterv - 1)->dist2center(coord);
-
-				ivar->var[idx] = dist;
-			} else {
-				int64_t coord = (m_interval1d.start + m_interval1d.end) / 2;
-				GIntervals::const_iterator &iinterv = ivar->siinterv;
-				double dist = numeric_limits<double>::quiet_NaN();
-
-				while (iinterv != ivar->sintervs.end() && ivar->siinterv->chromid < m_interval1d.chromid)
-					++iinterv;
-
-				while (iinterv != ivar->sintervs.end() && iinterv->chromid == m_interval1d.chromid && iinterv->start <= coord) {
-					if (iinterv->end > coord)
-						dist = iinterv->dist2center(coord);
-					++iinterv;
-				}
-
-				ivar->var[idx] = dist;
-			}
-		}
-		else if (ivar->val_func == Interv_var::COVERAGE)
-		{
-			const GInterval &interval = ivar->imdf1d ? ivar->imdf1d->interval : m_interval1d;
-
-			if (ivar->imdf1d && ivar->imdf1d->out_of_range)
-			{
-				ivar->var[idx] = 0;
-				continue;
-			}
-
-			int64_t total_overlap = 0;
-			GIntervals::const_iterator iinterv;
-
-			// For non-sequential access or first access
-			if (ivar->imdf1d || ivar->siinterv == ivar->sintervs.end())
-			{
-				iinterv = lower_bound(ivar->sintervs.begin(), ivar->sintervs.end(), interval,
-									  GIntervals::compare_by_start_coord);
-
-				// Check previous interval too
-				if (iinterv != ivar->sintervs.begin())
-				{
-					auto prev = iinterv - 1;
-					if (prev->chromid == interval.chromid && prev->end > interval.start)
-					{
-						int64_t overlap_start = max(interval.start, prev->start);
-						int64_t overlap_end = min(interval.end, prev->end);
-						total_overlap += overlap_end - overlap_start;
-					}
-				}
-			}
-			else
-			{
-				// For sequential access, start from last position
-				iinterv = ivar->siinterv;
-
-				// Skip past intervals from previous chromosomes
-				while (iinterv != ivar->sintervs.end() && iinterv->chromid < interval.chromid)
-					++iinterv;
-
-				// But check if we need to back up
-				while (iinterv != ivar->sintervs.begin() &&
-					   (iinterv - 1)->chromid == interval.chromid &&
-					   (iinterv - 1)->end > interval.start)
-				{
-					--iinterv;
-				}
-			}
-
-			// Check forward intervals
-			while (iinterv != ivar->sintervs.end() &&
-				   iinterv->chromid == interval.chromid &&
-				   iinterv->start < interval.end)
-			{
-				if (iinterv->end > interval.start)
-				{
-					int64_t overlap_start = max(interval.start, iinterv->start);
-					int64_t overlap_end = min(interval.end, iinterv->end);
-					total_overlap += overlap_end - overlap_start;
-				}
-				++iinterv;
-			}
-
-			if (!ivar->imdf1d)
-			{
-				ivar->siinterv = iinterv;
-			}
-
-			ivar->var[idx] = (double)total_overlap / (interval.end - interval.start);
-		}
-	}
+	// Process value variables
+	m_value_processor->process_value_vars(m_value_vars, m_interval1d, idx);
 }

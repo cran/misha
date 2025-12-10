@@ -3,7 +3,9 @@
 
 #include <cstdint>
 #include <cmath>
+#include <limits>
 #include <vector>
+#include <string>
 
 #include "GenomeTrack1D.h"
 #include "GIntervals.h"
@@ -42,10 +44,13 @@ public:
 
 	void set_slice(const vector<unsigned> &slice);
 	void set_slice_function(SliceFunctions func, const vector<unsigned> &slice);
+
 	void set_slice_quantile(double percentile, uint64_t rnd_sampling_buf_size, uint64_t lowest_vals_buf_size,
 							uint64_t highest_vals_buf_size, const vector<unsigned> &slice);
 
-	virtual void read_interval(const GInterval &interval);
+	void read_interval(const GInterval &interval) override;
+	double last_max_pos() const override;
+	double last_min_pos() const override;
 
 	void init_read(const char *filename, int chromid);
 	void init_write(const char *filename, int chromid);
@@ -54,13 +59,13 @@ public:
 
 	const GIntervals &get_intervals();
 	void get_sliced_vals(GIntervals::const_iterator iinterval, vector<float> &vals, unsigned numcols);
-	
+
 protected:
 	static const int RECORD_SIZE;
 
 	GenomeTrackArrays          *m_master_obj;
 	vector<GenomeTrackArrays *> m_dependent_objs;
-	uint64_t                      m_last_array_vals_idx;
+	uint64_t                    m_last_array_vals_idx;
 
 	GIntervals                  m_intervals;
 	vector<long>                m_vals_pos;
@@ -68,6 +73,12 @@ protected:
 	bool                        m_is_writing;
 	long                        m_intervals_pos;
 	GIntervals::const_iterator  m_icur_interval;
+	int64_t                     m_base_offset{0};
+
+	// State for indexed "smart handle"
+	std::string                 m_dat_path;
+	std::string                 m_dat_mode;
+	bool                        m_dat_open{false};
 
 	SliceFunctions              m_slice_function;
 	double                      m_slice_percentile;
@@ -127,6 +138,10 @@ inline void GenomeTrackArrays::calc_vals(const GInterval &interval)
 		(*itrack)->m_last_sum = 0;
 		(*itrack)->m_last_min = numeric_limits<float>::max();
 		(*itrack)->m_last_max = -numeric_limits<float>::max();
+		if ((*itrack)->m_functions[MAX_POS])
+			(*itrack)->m_last_max_pos = numeric_limits<double>::quiet_NaN();
+		if ((*itrack)->m_functions[MIN_POS])
+			(*itrack)->m_last_min_pos = numeric_limits<double>::quiet_NaN();
 	}
 
 	for (GIntervals::const_iterator iinterv = m_icur_interval; iinterv != m_intervals.end(); ++iinterv) {
@@ -138,7 +153,16 @@ inline void GenomeTrackArrays::calc_vals(const GInterval &interval)
 			if (!std::isnan(v)) {
 				(*itrack)->m_last_sum += v;
 				(*itrack)->m_last_min = min((*itrack)->m_last_min, v);
-				(*itrack)->m_last_max = max((*itrack)->m_last_max, v);
+				if (v > (*itrack)->m_last_max) {
+					(*itrack)->m_last_max = v;
+					if ((*itrack)->m_functions[MAX_POS])
+						(*itrack)->m_last_max_pos = iinterv->start;
+				}
+				if (v < (*itrack)->m_last_min) {
+					(*itrack)->m_last_min = v;
+					if ((*itrack)->m_functions[MIN_POS])
+						(*itrack)->m_last_min_pos = iinterv->start;
+				}
 
 				if ((*itrack)->m_functions[STDDEV])
 					(*itrack)->m_mean_square_sum += v * v;
@@ -154,8 +178,11 @@ inline void GenomeTrackArrays::calc_vals(const GInterval &interval)
 	for (vector<GenomeTrackArrays *>::iterator itrack = m_dependent_objs.begin(); itrack != m_dependent_objs.end(); ++itrack) {
 		if ((*itrack)->m_num_vs > 0)
 			(*itrack)->m_last_avg = (*itrack)->m_last_nearest = (*itrack)->m_last_sum / (*itrack)->m_num_vs;
-		else
+		else {
 			(*itrack)->m_last_avg = (*itrack)->m_last_nearest = (*itrack)->m_last_min = (*itrack)->m_last_max = (*itrack)->m_last_sum = numeric_limits<float>::quiet_NaN();
+			if ((*itrack)->m_functions[MIN_POS])
+				(*itrack)->m_last_min_pos = numeric_limits<double>::quiet_NaN();
+		}
 
 		// we are calaculating unbiased standard deviation:
 		// sqrt(sum((x-mean)^2) / (N-1)) = sqrt(sum(x^2)/(N-1) - N*(mean^2)/(N-1))

@@ -4,16 +4,45 @@
 \alias{gvtrack.create}
 \title{Creates a new virtual track}
 \usage{
-gvtrack.create(vtrack = NULL, src = NULL, func = NULL, params = NULL, ...)
+gvtrack.create(
+  vtrack = NULL,
+  src = NULL,
+  func = NULL,
+  params = NULL,
+  dim = NULL,
+  sshift = NULL,
+  eshift = NULL,
+  filter = NULL,
+  ...
+)
 }
 \arguments{
 \item{vtrack}{virtual track name}
 
-\item{src}{source (track/intervals). NULL for PWM functions}
+\item{src}{source (track/intervals). NULL for PWM functions. For value-based
+tracks, provide a data frame with columns \code{chrom}, \code{start}, \code{end},
+and one numeric value column. The data frame functions as an in-memory sparse
+track and supports all track-based summarizer functions. Intervals must not overlap.}
 
 \item{func}{function name (see above)}
 
 \item{params}{function parameters (see above)}
+
+\item{dim}{use 'NULL' or '0' for 1D iterators. '1' converts 2D iterator to
+(chrom1, start1, end1) , '2' converts 2D iterator to (chrom2, start2, end2)}
+
+\item{sshift}{shift of 'start' coordinate}
+
+\item{eshift}{shift of 'end' coordinate}
+
+\item{filter}{genomic mask to apply. Can be:
+\itemize{
+  \item A data.frame with columns 'chrom', 'start', 'end' (intervals to mask)
+  \item A character string naming an intervals set
+  \item A character string naming a track (must be intervals-type track)
+  \item A list of any combination of the above (all will be unified)
+  \item NULL to clear the filter
+}}
 
 \item{...}{additional PWM parameters}
 }
@@ -25,135 +54,151 @@ Creates a new virtual track.
 }
 \details{
 This function creates a new virtual track named 'vtrack' with the given
-source, function and parameters. 'src' can be either a track or intervals
-(1D or 2D). Use the following table for a reference of all valid source,
-function and parameters combinations:
+source, function and parameters. 'src' can be either a track, intervals
+(1D or 2D), or a data frame with intervals and a numeric value column
+(value-based track). The tables below summarize the supported combinations.
 
-\emph{src = [Track], func = "avg", params = NULL} \cr Average track value in
-iterator interval.
+\strong{Value-based tracks}
+Value-based tracks are data frames containing genomic intervals with associated
+numeric values. They function as in-memory sparse tracks without requiring
+track creation in the database. To create a value-based track, provide a data
+frame with columns \code{chrom}, \code{start}, \code{end}, and one numeric
+value column (any name is acceptable). Value-based tracks support all track-based
+summarizer functions (e.g., \code{avg}, \code{min}, \code{max}, \code{sum},
+\code{stddev}, \code{quantile}, \code{nearest}, \code{exists}, \code{size},
+\code{first}, \code{last}, \code{sample}, and position functions), but do not
+support overlapping intervals. They behave like sparse tracks in aggregation:
+values are aggregated using count-based averaging (each interval contributes equally
+regardless of length), not coverage-based averaging.
 
-\emph{src = [Track], func = "max", params = NULL} \cr Maximal track value in
-iterator interval.
-
-\emph{src = [Track], func = "min", params = NULL} \cr Minimal track value in
-iterator interval.
-
-\emph{src = ['Dense' / 'Sparse' / 'Array' track], func = "nearest", params =
-NULL} \cr Mean track value in iterator interval. If there are no track
-values covered by an iterator interator (can occur only in 'Sparse' track),
-the nearest track value is returned.
-
-\emph{src = ['Dense' / 'Sparse' / 'Array' track], func = "stddev", params =
-NULL} \cr Unbiased standard deviation of track values in iterator interval.
-
-\emph{src = ['Dense' / 'Sparse' / 'Array' track], func = "sum", params =
-NULL} \cr Sum of track values in iterator interval.
-
-\emph{src = ['Dense' / 'Sparse' / 'Array' track], func = "quantile", params
-= [Percentile in the range of [0, 1]]} \cr Quantile of track values in
-iterator interval.
-
-\emph{src = ['Dense' track], func = "global.percentile", params = NULL} \cr
-Percentile of an average track value in iterator interval relatively to all
-values of the track.
-
-\emph{src = ['Dense' track], func = "global.percentile.max", params = NULL}
-\cr Percentile of a maximal track value in iterator interval relatively to
-all values of the track.
-
-\emph{src = ['Dense' track], func = "global.percentile.min", params = NULL}
-\cr Percentile of a minimal track value in iterator interval relatively to
-all values of the track.
-
-\emph{src = [2D track], func = "area", params = NULL} \cr Area covered by
-iterator interval.
-
-\emph{src = [2D track], func = "weighted.sum", params = NULL} \cr Weighted
-sum of values where each weight equals to the intersection area between the
-iterator interval and the rectangle containing the value.
-
-\emph{src = [1D intervals], func = "distance", params = [Minimal distance
-from center (default: 0)]} \cr Given the center 'C' of the current iterator
-interval returns 'DC * X/2', where 'DC' is the normalized distance to the
-center of the interval that contains 'C', and 'X' is the value of the
-parameter. If no interval contains 'C' the resulted value is 'D + XXX/2'
-where 'D' is the distance between 'C' and the edge of the closest interval.
-Distance can be positive or negative depending on the position of the
-coordinate relative to the interval and the strand (-1 or 1) of the
-interval. Distance is always positive if 'strand' is '0' or if 'strand'
-column is missing. Distance is 'NA' if no intervals exist for the current
-chromosome.
-
-\emph{src = [1D intervals], func = "distance.center", params = NULL} \cr
-Given the center 'C' of the current iterator interval returns 'NaN' if 'C'
-is outside of the intervals, otherwise returns the distance between 'C' and
-the center of the closest interval. Distance can be positive or negative
-depending on the position of the coordinate relative to the interval and the
-strand (-1 or 1) of the interval. Distance is always positive if 'strand' is
-'0' or if 'strand' column is missing.
-
-\emph{src = [1D intervals], func = "coverage", params = NULL} \cr
-For each iterator interval, calculates the fraction of its length that is covered by the
-source intervals. Returns a value between 0 and 1. For example, if an iterator interval is [100,200]
-and the source intervals cover positions 120-140 and 160-170, the coverage would be 0.3
-((20 + 10) / 100 = 0.3). Overlapping source intervals are first unified.
-
-\emph{func = "pwm", params = list(pssm = matrix, bidirect = TRUE,
-prior = 0.01, extend = TRUE)} \cr
-Calculates total log-likelihood score of DNA sequence against PSSM.
-Uses log-sum-exp over all positions. For bidirect=TRUE, scans both
-strands. Prior adds pseudocounts, extend=TRUE allows scoring at boundaries.
-
-\emph{func = "pwm.max", params = list(pssm = matrix, bidirect = TRUE,
-prior = 0.01, extend = TRUE)} \cr
-Returns maximum log-likelihood score of best PSSM match. bidirect=TRUE
-checks both strands. Prior adds pseudocounts, extend=TRUE allows boundary
-scoring.
-
-\emph{func = "pwm.max.pos", params = list(pssm = matrix, bidirect = TRUE,
-prior = 0.01, extend = TRUE)} \cr
-Returns 1-based position of best PSSM match.
-If bidirect=TRUE, the position would be positive if the best hit was at the
-forward strand, and negative if it was at the reverse strand. When strand is
--1 the position is still according to the forward strand, but the hit is at
-the end of the match.
-Prior adds pseudocounts, extend=TRUE allows boundary scoring.
-
-For all PWM functions:
-\itemize{
-  \item pssm: Position-specific scoring matrix (A,C,G,T frequencies)
-  \item bidirect: If TRUE, scans both strands; if FALSE, forward only
-  \item prior: Pseudocount for frequencies (default: 0.01)
-  \item extend: If TRUE, computes boundary scores
-  \item strand: If 1, scans forward strand; if -1, scans reverse strand.
-For strand == 1, the energy (and position of the best match) would be at
-the beginning of the match, for strand == -1, the energy (and position of
-the best match) would be at the end of the match.
+\strong{Track-based summarizers}
+\tabular{llll}{
+  Source \tab func \tab params \tab Description \cr
+  Track \tab avg \tab NULL \tab Average track value in the iterator interval. \cr
+  Track (1D) \tab exists \tab vals (optional) \tab Returns 1 if any value exists (or specific vals if provided), 0 otherwise. \cr
+  Track (1D) \tab first \tab NULL \tab First value in the iterator interval. \cr
+  Track (1D) \tab last \tab NULL \tab Last value in the iterator interval. \cr
+  Track \tab max \tab NULL \tab Maximum track value in the iterator interval. \cr
+  Track \tab min \tab NULL \tab Minimum track value in the iterator interval. \cr
+  Dense / Sparse / Array track \tab nearest \tab NULL \tab Average value inside the iterator; for sparse tracks with no samples in the interval, falls back to the closest sample outside the interval (by genomic distance). \cr
+  Track (1D) \tab sample \tab NULL \tab Uniformly sampled source value from the iterator interval. \cr
+  Track (1D) \tab size \tab NULL \tab Number of non-NaN values in the iterator interval. \cr
+  Dense / Sparse / Array track \tab stddev \tab NULL \tab Unbiased standard deviation of values in the iterator interval. \cr
+  Dense / Sparse / Array track \tab sum \tab NULL \tab Sum of values in the iterator interval. \cr
+  Dense / Sparse / Array track \tab quantile \tab Percentile in [0, 1] \tab Quantile of values in the iterator interval. \cr
+  Dense track \tab global.percentile \tab NULL \tab Percentile of the interval average relative to the full-track distribution. \cr
+  Dense track \tab global.percentile.max \tab NULL \tab Percentile of the interval maximum relative to the full-track distribution. \cr
+  Dense track \tab global.percentile.min \tab NULL \tab Percentile of the interval minimum relative to the full-track distribution. \cr
 }
 
-PWM parameters are accepted as list or individual parameters (see examples).
-
-\emph{func = "kmer.count", params = list(kmer = "ACGT", extend = TRUE, strand = 0)} \cr
-Counts occurrences of the specified kmer in each interval. The extend=TRUE
-parameter (default) allows counting kmers that span interval boundaries.
-The strand parameter can be 1 (forward strand), -1 (reverse strand), or 0 (both strands).
-
-\emph{func = "kmer.frac", params = list(kmer = "ACGT", extend = TRUE, strand = 0)} \cr
-Calculates the fraction of possible positions in each interval that contain
-the specified kmer. The extend=TRUE parameter (default) allows counting kmers
-that span interval boundaries. The strand parameter can be 1 (forward strand), -1
-(reverse strand), or 0 (both strands).
-
-For kmer functions:
-\itemize{
-  \item kmer: The DNA sequence to count (case-insensitive)
-  \item extend: If TRUE, counts kmers that span interval boundaries
-  \item strand: If 1, counts kmers on forward strand; if -1, counts kmers on reverse strand. If
- 0, counts kmers on both strands. Default is 0.
+\strong{Track position summarizers}
+\tabular{llll}{
+  Source \tab func \tab params \tab Description \cr
+  Track (1D) \tab first.pos.abs \tab NULL \tab Absolute genomic coordinate of the first value. \cr
+  Track (1D) \tab first.pos.relative \tab NULL \tab Zero-based position (relative to interval start) of the first value. \cr
+  Track (1D) \tab last.pos.abs \tab NULL \tab Absolute genomic coordinate of the last value. \cr
+  Track (1D) \tab last.pos.relative \tab NULL \tab Zero-based position (relative to interval start) of the last value. \cr
+  Track (1D) \tab max.pos.abs \tab NULL \tab Absolute genomic coordinate of the maximum value inside the iterator interval. \cr
+  Track (1D) \tab max.pos.relative \tab NULL \tab Zero-based position (relative to interval start) of the maximum value. \cr
+  Track (1D) \tab min.pos.abs \tab NULL \tab Absolute genomic coordinate of the minimum value inside the iterator interval. \cr
+  Track (1D) \tab min.pos.relative \tab NULL \tab Zero-based position (relative to interval start) of the minimum value. \cr
+  Track (1D) \tab sample.pos.abs \tab NULL \tab Absolute genomic coordinate of a uniformly sampled value. \cr
+  Track (1D) \tab sample.pos.relative \tab NULL \tab Zero-based position (relative to interval start) of a uniformly sampled value. \cr
 }
 
-Kmer parameters are accepted as list or individual parameters (see examples).
-Note that for palindromic kmers, setting strand to 1 or -1 is recommended to avoid double counting.
+For \code{max.pos.relative}, \code{min.pos.relative}, \code{first.pos.relative}, \code{last.pos.relative}, \code{sample.pos.relative},
+iterator modifiers (including \code{sshift} /
+\code{eshift} and 1D projections generated via \code{gvtrack.iterator}) are
+applied before the position is reported. In other words, the returned
+coordinate is always 0-based and measured from the start of the iterator
+interval after all modifier adjustments.
+
+\strong{Interval-based summarizers}
+\tabular{llll}{
+  Source \tab func \tab params \tab Description \cr
+  1D intervals \tab distance \tab Minimal distance from center (default 0) \tab Signed distance using normalized formula when inside intervals, distance to edge when outside; see notes below for exact formula. \cr
+  1D intervals \tab distance.center \tab NULL \tab Distance from iterator center to the closest interval center, \code{NA} if outside all intervals. \cr
+  1D intervals \tab distance.edge \tab NULL \tab Edge-to-edge distance from iterator interval to closest source interval (like \code{gintervals.neighbors}); see notes below for strand handling. \cr
+  1D intervals \tab coverage \tab NULL \tab Fraction of iterator length covered by source intervals (after unifying overlaps). \cr
+  1D intervals \tab neighbor.count \tab Max distance (>= 0) \tab Number of source intervals whose edge-to-edge distance from the iterator interval is within params (no unification). \cr
+}
+
+\strong{2D track summarizers}
+\tabular{llll}{
+  Source \tab func \tab params \tab Description \cr
+  2D track \tab area \tab NULL \tab Area covered by intersections of track rectangles with the iterator interval. \cr
+  2D track \tab weighted.sum \tab NULL \tab Weighted sum of values where each weight equals the intersection area. \cr
+}
+
+\strong{Motif (PWM) summarizers}
+\tabular{llll}{
+  Source \tab func \tab Key params \tab Description \cr
+  NULL (sequence) \tab pwm \tab pssm, bidirect, prior, extend, spat_* \tab Log-sum-exp score of motif likelihoods across all anchors inside the iterator interval. \cr
+  NULL (sequence) \tab pwm.max \tab pssm, bidirect, prior, extend, spat_* \tab Maximum log-likelihood score among all anchors (per-position union across strands). \cr
+  NULL (sequence) \tab pwm.max.pos \tab pssm, bidirect, prior, extend, spat_* \tab 1-based position of the best-scoring anchor (signed by strand when \code{bidirect = TRUE}); coordinates are always relative to the iterator interval after any \code{gvtrack.iterator()} shifts/extensions. \cr
+  NULL (sequence) \tab pwm.count \tab pssm, score.thresh, bidirect, prior, extend, strand, spat_* \tab Count of anchors whose score exceeds \code{score.thresh} (per-position union). \cr
+}
+
+\strong{K-mer summarizers}
+\tabular{llll}{
+  Source \tab func \tab Key params \tab Description \cr
+  NULL (sequence) \tab kmer.count \tab kmer, extend, strand \tab Number of k-mer occurrences whose anchor lies inside the iterator interval. \cr
+  NULL (sequence) \tab kmer.frac \tab kmer, extend, strand \tab Fraction of possible anchors within the interval that match the k-mer. \cr
+}
+
+\strong{Masked sequence summarizers}
+\tabular{llll}{
+  Source \tab func \tab Key params \tab Description \cr
+  NULL (sequence) \tab masked.count \tab NULL \tab Number of masked (lowercase) base pairs in the iterator interval. \cr
+  NULL (sequence) \tab masked.frac \tab NULL \tab Fraction of base pairs in the iterator interval that are masked (lowercase). \cr
+}
+
+The sections below provide additional notes for motif, interval, k-mer, and masked sequence functions.
+
+\strong{Motif (PWM) notes}
+\itemize{
+  \item \code{pssm}: Position-specific scoring matrix (matrix or data frame) with columns \code{A}, \code{C}, \code{G}, \code{T}; extra columns are ignored.
+  \item \code{bidirect}: When TRUE (default), both strands are scanned and combined per genomic start (per-position union). The \code{strand} argument is ignored. When FALSE, only the strand specified by \code{strand} is scanned.
+  \item \code{prior}: Pseudocount added to frequencies (default 0.01). Set to 0 to disable.
+  \item \code{extend}: Extends the fetched sequence so boundary-anchored motifs retain full context (default TRUE). The END coordinate is padded by motif_length - 1 for all strand modes; anchors must still start inside the iterator.
+  \item Neutral characters (\code{N}, \code{n}, \code{*}) contribute the mean log-probability of the corresponding PSSM column on both strands.
+  \item \code{strand}: Used only when \code{bidirect = FALSE}; 1 scans the forward strand, -1 scans the reverse strand. For \code{pwm.max.pos}, strand = -1 reports the hit position at the end of the match (still relative to the forward orientation).
+  \item \code{score.thresh}: Threshold for \code{pwm.count}. Anchors with log-likelihood >= \code{score.thresh} are counted; only one count per genomic start.
+  \item Spatial weighting (\code{spat_factor}, \code{spat_bin}, \code{spat_min}, \code{spat_max}): optional position-dependent weights applied in log-space. Provide a positive numeric vector \code{spat_factor}; \code{spat_bin} (integer > 0) defines bin width; \code{spat_min}/\code{spat_max} restrict the scanning window.
+  \item \code{pwm.max.pos}: Positions are reported 1-based relative to the final scan window (after iterator shifts and spatial trimming). Ties resolve to the most 5' anchor; the forward strand wins ties at the same coordinate. Values are signed when \code{bidirect = TRUE} (positive for forward, negative for reverse).
+}
+
+\strong{Spatial weighting}
+enables position-dependent weighting for modeling positional biases. Bins are 0-indexed from the
+scan start. When using \code{gvtrack.iterator()} shifts (e.g., \code{sshift = -50}, \code{eshift = 50}), bins index from
+the expanded scan window start, not the original interval. Both strands use the same bin at each
+genomic position. Positions beyond the last bin reuse the final bin's weight. If the window size is
+not divisible by \code{spat_bin}, the last bin is shorter (e.g., scanning 500 bp with 40 bp bins yields
+bins 0-11 of 40 bp plus bin 12 of 20 bp). Use \code{spat_min} and \code{spat_max} to restrict scanning to a
+range divisible by \code{spat_bin} if needed.
+
+PWM parameters can be supplied either as a single list (\code{params}) or via named arguments (see examples).
+
+\strong{Interval distance notes}
+
+\code{distance}: Given the center 'C' of the current iterator interval, returns 'DC * X/2' where 'DC' is the normalized distance to the center of the interval that contains 'C', and 'X' is the value of the parameter (default: 0). If no interval contains 'C', the result is 'D + X/2' where 'D' is the distance between 'C' and the edge of the closest interval.
+
+\code{distance.center}: Given the center 'C' of the current iterator interval, returns \code{NaN} if 'C' is outside of all intervals, otherwise returns the distance between 'C' and the center of the closest interval.
+
+\code{distance.edge}: Computes edge-to-edge distance from the iterator interval to the closest source interval, using the same calculation as \code{gintervals.neighbors}. Returns 0 for overlapping intervals. Distance sign depends on the strand column of source intervals; returns unsigned (absolute) distance if no strand column exists. Returns \code{NA} if no source intervals exist on the current chromosome.
+
+For \code{distance} and \code{distance.center}, distance can be positive or negative depending on the position of the coordinate relative to the interval and the strand (-1 or 1) of the interval. Distance is always positive if \code{strand = 0} or if the strand column is missing. The result is \code{NA} if no intervals exist for the current chromosome.
+
+\strong{Difference between distance functions:} The \code{distance} function measures from the \emph{center} of the iterator interval (a single coordinate point) to the closest \emph{edge} of source intervals when outside, or returns a normalized distance within the interval when inside. The \code{distance.center} function measures from the center of the iterator interval to the \emph{center} of source intervals. The \code{distance.edge} function measures \emph{edge-to-edge} distance between intervals, exactly like \code{gintervals.neighbors}. Use \code{distance.edge} when you need the same distance computation as \code{gintervals.neighbors} within a virtual track context.
+
+\strong{K-mer notes}
+\itemize{
+  \item \code{kmer}: DNA sequence (case-insensitive) to count.
+  \item \code{extend}: If TRUE (default), counts kmers whose anchor lies in the interval even if the kmer extends beyond it; when FALSE, only kmers fully contained in the interval are considered.
+  \item \code{strand}: 1 counts forward-strand occurrences, -1 counts reverse-strand occurrences, 0 counts both strands (default). For palindromic kmers, consider using 1 or -1 to avoid double counting.
+}
+
+K-mer parameters can be supplied as a list or via named arguments (see examples).
 
 Modify iterator behavior with 'gvtrack.iterator' or 'gvtrack.iterator.2d'.
 }
@@ -229,10 +274,114 @@ gextract("g_frac + c_frac", gintervals(1, 0, 10000),
     iterator = 1000,
     colnames = "gc_content"
 )
+
+# Masked base pair counting
+gvtrack.create("masked_count", NULL, "masked.count")
+gvtrack.create("masked_frac", NULL, "masked.frac")
+gextract(c("masked_count", "masked_frac"), gintervals(1, 0, 10000), iterator = 1000)
+
+# Combined with GC content (unmasked regions only)
+gvtrack.create("gc", NULL, "kmer.frac", kmer = "G")
+gextract("gc * (1 - masked_frac)",
+    gintervals(1, 0, 10000),
+    iterator = 1000,
+    colnames = "gc_unmasked"
+)
+
+# Value-based track examples
+# Create a data frame with intervals and numeric values
+intervals_with_values <- data.frame(
+    chrom = "chr1",
+    start = c(100, 300, 500),
+    end = c(200, 400, 600),
+    score = c(10, 20, 30)
+)
+# Use as value-based sparse track (functions like sparse track)
+gvtrack.create("value_track", intervals_with_values, "avg")
+gvtrack.create("value_track_max", intervals_with_values, "max")
+gextract(c("value_track", "value_track_max"),
+    gintervals(1, 0, 10000),
+    iterator = 1000
+)
+
+# Spatial PWM examples
+# Create a PWM with higher weight in the center of intervals
+pssm <- matrix(
+    c(
+        0.7, 0.1, 0.1, 0.1,
+        0.1, 0.7, 0.1, 0.1,
+        0.1, 0.1, 0.7, 0.1,
+        0.1, 0.1, 0.1, 0.7
+    ),
+    ncol = 4, byrow = TRUE
+)
+colnames(pssm) <- c("A", "C", "G", "T")
+
+# Spatial factors: low weight at edges, high in center
+# For 200bp intervals with 40bp bins: bins 0, 40, 80, 120, 160
+spatial_weights <- c(0.5, 1.0, 2.0, 1.0, 0.5)
+
+gvtrack.create(
+    "spatial_pwm", NULL, "pwm",
+    list(
+        pssm = pssm,
+        bidirect = TRUE,
+        spat_factor = spatial_weights,
+        spat_bin = 40L
+    )
+)
+
+# Compare with non-spatial PWM
+gvtrack.create(
+    "regular_pwm", NULL, "pwm",
+    list(pssm = pssm, bidirect = TRUE)
+)
+
+gextract(c("spatial_pwm", "regular_pwm"),
+    gintervals(1, 0, 10000),
+    iterator = 200
+)
+
+# Using spatial parameters with iterator shifts
+gvtrack.create(
+    "spatial_extended", NULL, "pwm.max",
+    pssm = pssm,
+    spat_factor = c(0.5, 1.0, 2.0, 2.5, 2.0, 1.0, 0.5),
+    spat_bin = 40L
+)
+# Scan window will be 280bp (100bp + 2*90bp)
+gvtrack.iterator("spatial_extended", sshift = -90, eshift = 90)
+gextract("spatial_extended", gintervals(1, 0, 10000), iterator = 100)
+
+# Using spat_min/spat_max to restrict scanning to a window
+# For 500bp intervals, scan only positions 30-470 (440bp window)
+gvtrack.create(
+    "window_pwm", NULL, "pwm",
+    pssm = pssm,
+    bidirect = TRUE,
+    spat_min = 30, # 1-based position
+    spat_max = 470 # 1-based position
+)
+gextract("window_pwm", gintervals(1, 0, 10000), iterator = 500)
+
+# Combining spatial weighting with window restriction
+# Scan positions 50-450 with spatial weights favoring the center
+gvtrack.create(
+    "window_spatial_pwm", NULL, "pwm",
+    pssm = pssm,
+    bidirect = TRUE,
+    spat_factor = c(0.5, 1.0, 2.0, 2.5, 2.0, 1.0, 0.5, 1.0, 0.5, 0.5),
+    spat_bin = 40L,
+    spat_min = 50,
+    spat_max = 450
+)
+gextract("window_spatial_pwm", gintervals(1, 0, 10000), iterator = 500)
 }
 \seealso{
 \code{\link{gvtrack.info}}, \code{\link{gvtrack.iterator}},
 \code{\link{gvtrack.iterator.2d}}, \code{\link{gvtrack.array.slice}},
 \code{\link{gvtrack.ls}}, \code{\link{gvtrack.rm}}
+
+\code{\link{gvtrack.iterator}}, \code{\link{gvtrack.iterator.2d}}, \code{\link{gvtrack.filter}}
 }
 \keyword{~virtual}

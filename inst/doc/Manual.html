@@ -389,22 +389,33 @@ are required only by a subset of functions in the package.</p>
       mypssm.data        &lt;- ...
       mypssm.key         &lt;- ...
    seq/               &lt;- (optional)
-      chr1.seq           &lt;- seq (sequence) files
+      genome.seq         &lt;- indexed format: single sequence file
+      genome.idx         &lt;- indexed format: index file
+      OR
+      chr1.seq           &lt;- per-chromosome format: separate files
       chr2.seq           &lt;- ...
       chr3.seq           &lt;- ...
    tracks/
       tss.interv         &lt;- small intervals set = tss
-      big_data.interv/   &lt;- big intervals set = big_data
+      big_data.interv/   &lt;- big intervals set = big_data (per-chromosome format)
          .meta              &lt;- summary of the intervals set
          chr1               &lt;- chrom files
          chr5               &lt;- ...
-      rpt.track/         &lt;- track = rpt
+      indexed_intervals.interv/  &lt;- big intervals set (indexed format)
+         intervals.dat      &lt;- consolidated interval data
+         intervals.idx      &lt;- index file
+      rpt.track/         &lt;- track = rpt (per-chromosome format)
          .attributes        &lt;- track attributes (optional)
          chr1               &lt;- chrom files
          chr2               &lt;- ...
          chr3               &lt;- ...
          vars/              &lt;- track variables (optional)
              myresult           &lt;- track variable
+      indexed_track.track/   &lt;- track (indexed format)
+         track.dat          &lt;- consolidated track data
+         track.idx          &lt;- index file
+         .attributes        &lt;- track attributes (optional)
+         vars/              &lt;- track variables (optional)
       test/
          intervals1.interv  &lt;- intervals = test.intervals1
          track1.track/      &lt;- track = test.track1
@@ -434,18 +445,114 @@ Example:</p>
 X    154913754
 Y    57772954</code></pre>
 </div>
-<div id="seq-file" class="section level3">
-<h3>Seq File</h3>
-<p><em>Seq</em> (aka sequence) files are located in <code>seq</code>
-directory. Each of the Seq files contains a genomic sequence for a given
-chromosome as a contiguous string of ASCII characters. The length of the
-string should match the length of the chromosome. The file must be
-called <code>chrXXX.seq</code> where <code>XXX</code> indicates the name
-of the chromosome as it appears in <code>chrom_sizes.txt</code>
-file.</p>
-<p>Here is an example of an unusually short (25 base pairs) Seq
-file:</p>
+<div id="seq-files" class="section level3">
+<h3>Seq Files</h3>
+<p>Genomic sequences are stored in the <code>seq</code> directory. Two
+formats are supported:</p>
+<div id="indexed-format-recommended" class="section level4">
+<h4>Indexed Format (Recommended)</h4>
+<p>The indexed format uses two files: - <code>genome.seq</code>: Single
+binary file containing concatenated sequences for all contigs -
+<code>genome.idx</code>: Binary index mapping contig names to positions
+in genome.seq</p>
+<p>This format provides better performance and scalability, especially
+for genomes with many contigs. It is the default format created by
+<code>gdb.create()</code>.</p>
+<p><strong>Format Specifications:</strong></p>
+<p>The <code>genome.idx</code> file has the following structure: -
+<strong>Header (24 bytes)</strong>: - Magic number:
+<code>&quot;MISHAIDX&quot;</code> (8 bytes) - Index version: <code>uint32_t</code>
+(4 bytes, currently 1) - Number of contigs: <code>uint32_t</code> (4
+bytes) - CRC64-ECMA checksum: <code>uint64_t</code> (8 bytes)</p>
+<ul>
+<li><strong>Entries</strong> (one per contig):
+<ul>
+<li>Chromosome ID: <code>uint32_t</code> (4 bytes) - alphabetical rank
+(0, 1, 2, …)</li>
+<li>Name length: <code>uint16_t</code> (2 bytes)</li>
+<li>Name: UTF-8 string (not null-terminated)</li>
+<li>Offset in genome.seq: <code>uint64_t</code> (8 bytes)</li>
+<li>Sequence length: <code>uint64_t</code> (8 bytes)</li>
+<li>Reserved: <code>uint64_t</code> (8 bytes, currently zeros)</li>
+</ul></li>
+</ul>
+<p>All multi-byte integers are stored in little-endian byte order.</p>
+</div>
+<div id="per-chromosome-format" class="section level4">
+<h4>Per-Chromosome Format</h4>
+<p>Each contig has a separate <code>.seq</code> file containing its
+genomic sequence as a contiguous string of ASCII characters. Files are
+named <code>chrXXX.seq</code> where <code>XXX</code> is the contig name
+from <code>chrom_sizes.txt</code>.</p>
+<p>Example of a short (25 base pairs) Seq file:</p>
 <pre class="csv"><code>ggtgaAGccctggagattcttatta</code></pre>
+<p>To create a database in the per-chromosome format, use
+<code>gdb.create(..., format = &quot;per-chromosome&quot;)</code>.</p>
+</div>
+</div>
+<div id="track-files" class="section level3">
+<h3>Track Files</h3>
+<p>Tracks can be stored in two different formats: <strong>per-chromosome
+format</strong> or <strong>indexed format</strong>.</p>
+<div id="per-chromosome-format-1" class="section level4">
+<h4>Per-Chromosome Format</h4>
+<p>In the traditional per-chromosome format, each chromosome’s track
+data is stored in a separate file within a track directory (e.g.,
+<code>tracks/mytrack.track/chr1</code>,
+<code>tracks/mytrack.track/chr2</code>, etc.). This format works well
+for genomes with a small number of chromosomes.</p>
+</div>
+<div id="indexed-format-recommended-for-multi-contig-genomes" class="section level4">
+<h4>Indexed Format (Recommended for Multi-Contig Genomes)</h4>
+<p>The indexed format consolidates all chromosome data into two files: -
+<code>track.dat</code>: Single binary file containing concatenated track
+data for all chromosomes - <code>track.idx</code>: Binary index mapping
+chromosome IDs to positions in track.dat</p>
+<p>This format dramatically reduces file descriptor usage for genomes
+with many contigs (e.g., draft assemblies with thousands of scaffolds)
+and improves performance for parallel access.</p>
+<p><strong>Format Specifications:</strong></p>
+<p>The <code>track.idx</code> file has the following structure: -
+<strong>Header (36 bytes)</strong>: - Magic number:
+<code>&quot;MISHATDX&quot;</code> (8 bytes) - Index version: <code>uint32_t</code>
+(4 bytes, currently 1) - Track type: <code>uint32_t</code> (4 bytes) -
+0=dense, 1=sparse, 2=array - Number of contigs: <code>uint32_t</code> (4
+bytes) - Flags: <code>uint64_t</code> (8 bytes) - bit 0 indicates
+little-endian - CRC64-ECMA checksum: <code>uint64_t</code> (8 bytes)</p>
+<ul>
+<li><strong>Entries</strong> (24 bytes per contig):
+<ul>
+<li>Chromosome ID: <code>uint32_t</code> (4 bytes)</li>
+<li>Offset in track.dat: <code>uint64_t</code> (8 bytes)</li>
+<li>Data length: <code>uint64_t</code> (8 bytes)</li>
+<li>Reserved: <code>uint32_t</code> (4 bytes, for future use)</li>
+</ul></li>
+</ul>
+<p>All multi-byte integers are stored in little-endian byte order.</p>
+<p><strong>Converting to Indexed Format:</strong></p>
+<p>Existing per-chromosome tracks can be converted to indexed format
+using <code>gtrack.convert_to_indexed()</code>:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" tabindex="-1"></a><span class="co"># Convert a track to indexed format</span></span>
+<span id="cb5-2"><a href="#cb5-2" tabindex="-1"></a><span class="fu">gtrack.convert_to_indexed</span>(<span class="st">&quot;my_track&quot;</span>)</span>
+<span id="cb5-3"><a href="#cb5-3" tabindex="-1"></a></span>
+<span id="cb5-4"><a href="#cb5-4" tabindex="-1"></a><span class="co"># Check track format</span></span>
+<span id="cb5-5"><a href="#cb5-5" tabindex="-1"></a>info <span class="ot">&lt;-</span> <span class="fu">gtrack.info</span>(<span class="st">&quot;my_track&quot;</span>)</span>
+<span id="cb5-6"><a href="#cb5-6" tabindex="-1"></a><span class="fu">print</span>(info<span class="sc">$</span>format) <span class="co"># &quot;indexed&quot; or &quot;per-chromosome&quot;</span></span></code></pre></div>
+<p><strong>Supported Track Types:</strong> Dense (fixed-bin), Sparse,
+and Array tracks (1D only) can use indexed format. 2D tracks and virtual
+tracks are not supported for indexed format.</p>
+<p><strong>Backward Compatibility:</strong> The indexed format is fully
+transparent to all misha functions. Both formats can coexist in the same
+database and are used identically in track expressions and analysis
+functions.</p>
+<p><strong>Validation Limits:</strong> To prevent issues with corrupted
+or malicious index files, the following limits are enforced:</p>
+<ul>
+<li><strong>Maximum contigs per index</strong>: 20,000,000 (applies to
+genome.idx, track.idx, intervals.idx)</li>
+<li><strong>Maximum contig name length</strong>: 1,024 bytes</li>
+</ul>
+</div>
 </div>
 <div id="pssm-set" class="section level3">
 <h3>PSSM Set</h3>
@@ -634,12 +741,81 @@ interval set.</p>
 <p>Saved interval sets in the small format can be seamlessly used in all
 functions and track expressions without the need to explicitly load
 them.</p>
-<div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" tabindex="-1"></a><span class="co"># &#39;annotations&#39; is an intervals set saved in Genomic Database</span></span>
-<span id="cb6-2"><a href="#cb6-2" tabindex="-1"></a><span class="fu">gintervals.intersect</span>(<span class="st">&quot;annotations&quot;</span>, <span class="fu">gintervals</span>(<span class="dv">2</span>))</span></code></pre></div>
+<div id="interval-set-storage-formats" class="section level4">
+<h4>Interval Set Storage Formats</h4>
+<p>Big interval sets can be stored in two formats:
+<strong>per-chromosome format</strong> or <strong>indexed
+format</strong>.</p>
+<p><strong>Per-Chromosome Format:</strong> In this traditional format,
+intervals for each chromosome (or chromosome pair for 2D intervals) are
+stored in separate files within an interval set directory. For 1D
+intervals: <code>myintervals.interv/chr1</code>, <code>chr2</code>, etc.
+For 2D intervals: <code>myintervals.interv/chr1-chr2</code>,
+<code>chr1-chr3</code>, etc.</p>
+<p><strong>Indexed Format (Recommended for Multi-Contig
+Genomes):</strong> The indexed format consolidates all chromosomes into
+two files, dramatically reducing file descriptor usage for genomes with
+many contigs.</p>
+<p><strong>1D Intervals</strong> use: - <code>intervals.dat</code>:
+Binary file with concatenated interval data -
+<code>intervals.idx</code>: Binary index file (36-byte header + 24 bytes
+per contig)</p>
+<p>The <code>intervals.idx</code> file structure: - <strong>Header (36
+bytes)</strong>: - Magic: <code>&quot;MISHAI1D&quot;</code> (8 bytes) - Version:
+<code>uint32_t</code> (4 bytes) - Number of entries:
+<code>uint32_t</code> (4 bytes) - Flags: <code>uint64_t</code> (8 bytes)
+- bit 0 indicates little-endian - CRC64-ECMA checksum:
+<code>uint64_t</code> (8 bytes) - Reserved: <code>uint32_t</code> (4
+bytes)</p>
+<ul>
+<li><strong>Entries</strong> (24 bytes per contig):
+<ul>
+<li>Chromosome ID: <code>uint32_t</code> (4 bytes)</li>
+<li>Offset: <code>uint64_t</code> (8 bytes)</li>
+<li>Length: <code>uint64_t</code> (8 bytes)</li>
+<li>Reserved: <code>uint32_t</code> (4 bytes)</li>
+</ul></li>
+</ul>
+<p><strong>2D Intervals</strong> use: - <code>intervals2d.dat</code>:
+Binary file with concatenated pair data - <code>intervals2d.idx</code>:
+Binary index file (40-byte header + 28 bytes per pair)</p>
+<p>The <code>intervals2d.idx</code> file structure: - <strong>Header (40
+bytes)</strong>: - Magic: <code>&quot;MISHAI2D&quot;</code> (8 bytes) - Version:
+<code>uint32_t</code> (4 bytes) - Number of entries:
+<code>uint32_t</code> (4 bytes) - Flags: <code>uint64_t</code> (8 bytes)
+- CRC64-ECMA checksum: <code>uint64_t</code> (8 bytes) - Reserved:
+<code>uint64_t</code> (8 bytes)</p>
+<ul>
+<li><strong>Entries</strong> (28 bytes per pair):
+<ul>
+<li>Chromosome 1 ID: <code>uint32_t</code> (4 bytes)</li>
+<li>Chromosome 2 ID: <code>uint32_t</code> (4 bytes)</li>
+<li>Offset: <code>uint64_t</code> (8 bytes)</li>
+<li>Length: <code>uint64_t</code> (8 bytes)</li>
+<li>Reserved: <code>uint32_t</code> (4 bytes)</li>
+</ul></li>
+</ul>
+<p><strong>Note:</strong> Only non-empty chromosome pairs are stored in
+the 2D index, avoiding O(N²) space overhead.</p>
+<p><strong>Converting to Indexed Format:</strong></p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" tabindex="-1"></a><span class="co"># Convert 1D interval set to indexed format</span></span>
+<span id="cb7-2"><a href="#cb7-2" tabindex="-1"></a><span class="fu">gintervals.convert_to_indexed</span>(<span class="st">&quot;my_intervals&quot;</span>)</span>
+<span id="cb7-3"><a href="#cb7-3" tabindex="-1"></a></span>
+<span id="cb7-4"><a href="#cb7-4" tabindex="-1"></a><span class="co"># Convert 2D interval set to indexed format</span></span>
+<span id="cb7-5"><a href="#cb7-5" tabindex="-1"></a><span class="fu">gintervals.2d.convert_to_indexed</span>(<span class="st">&quot;my_2d_intervals&quot;</span>)</span>
+<span id="cb7-6"><a href="#cb7-6" tabindex="-1"></a></span>
+<span id="cb7-7"><a href="#cb7-7" tabindex="-1"></a><span class="co"># Convert and remove old per-chromosome files</span></span>
+<span id="cb7-8"><a href="#cb7-8" tabindex="-1"></a><span class="fu">gintervals.convert_to_indexed</span>(<span class="st">&quot;my_intervals&quot;</span>, <span class="at">remove.old =</span> <span class="cn">TRUE</span>)</span></code></pre></div>
+<p>All multi-byte integers are stored in little-endian byte order. The
+indexed format is fully backward compatible with all misha
+functions.</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" tabindex="-1"></a><span class="co"># &#39;annotations&#39; is an intervals set saved in Genomic Database</span></span>
+<span id="cb8-2"><a href="#cb8-2" tabindex="-1"></a><span class="fu">gintervals.intersect</span>(<span class="st">&quot;annotations&quot;</span>, <span class="fu">gintervals</span>(<span class="dv">2</span>))</span></code></pre></div>
 <p>Likewise, big interval sets can be used in many but not all
 functions. A notable exception is <code>gintervals.load</code> that
 allows loading only a single chromosome (or a chromosome pair for 2D
 cases) of a big intervals set.</p>
+</div>
 </div>
 </div>
 <div id="tracks" class="section level2">
@@ -993,17 +1169,17 @@ want to use the percentile of a track value rather than the value
 itself? And maybe we even want to alter the iterator interval itself on
 the fly? This is where virtual tracks become useful.</p>
 <p>Virtual track is a set of rules that describe how the “source” (a
-real track or intervals) should be proceeded, and how the iterator
-interval should be modified. Virtual tracks are created with
-<code>gvtrack.create</code> function:</p>
-<div class="sourceCode" id="cb7"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" tabindex="-1"></a><span class="fu">gvtrack.create</span>(<span class="st">&quot;myvtrack&quot;</span>, <span class="st">&quot;dense_track&quot;</span>)</span></code></pre></div>
+real track, intervals, or a value-based track) should be proceeded, and
+how the iterator interval should be modified. Virtual tracks are created
+with <code>gvtrack.create</code> function:</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" tabindex="-1"></a><span class="fu">gvtrack.create</span>(<span class="st">&quot;myvtrack&quot;</span>, <span class="st">&quot;dense_track&quot;</span>)</span></code></pre></div>
 <p>This call creates a new virtual track named <code>myvtrack</code>.
 This virtual track can be used in the track expression instead of a real
 track <code>dense_track</code>. In our example <code>myvtrack</code> is
 just an alias of <code>dense_track</code>. Yet we can go on and create a
 more complicated virtual track if we specify a “function”, i.e. instruct
 the virtual track of what should be its value in track expression.</p>
-<div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" tabindex="-1"></a><span class="fu">gvtrack.create</span>(<span class="st">&quot;myvtrack&quot;</span>, <span class="st">&quot;dense_track&quot;</span>, <span class="st">&quot;global.percentile&quot;</span>)</span></code></pre></div>
+<div class="sourceCode" id="cb10"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" tabindex="-1"></a><span class="fu">gvtrack.create</span>(<span class="st">&quot;myvtrack&quot;</span>, <span class="st">&quot;dense_track&quot;</span>, <span class="st">&quot;global.percentile&quot;</span>)</span></code></pre></div>
 <p>In this example when <code>myvtrack</code> is evaluated in the track
 expression it will return the percentile of <span class="math inline">\(V_{avg}\)</span> among the values of
 <code>dense_track</code> where <span class="math inline">\(V_{avg}\)</span> is an average (or weighted
@@ -1015,8 +1191,8 @@ be the average of all non-NaN column values covered by an iterator
 interval. <code>gvtrack.array.slice</code> allows to select specific
 columns and to specify the function applied to the values of each track
 interval.</p>
-<div class="sourceCode" id="cb9"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" tabindex="-1"></a><span class="fu">gvtrack.create</span>(<span class="st">&quot;myvtrack&quot;</span>, <span class="st">&quot;array_track&quot;</span>, <span class="st">&quot;sum&quot;</span>)</span>
-<span id="cb9-2"><a href="#cb9-2" tabindex="-1"></a><span class="fu">gvtrack.array.slice</span>(<span class="st">&quot;myvtrack&quot;</span>, <span class="fu">c</span>(<span class="st">&quot;col2&quot;</span>, <span class="st">&quot;col5&quot;</span>), <span class="st">&quot;max&quot;</span>)</span></code></pre></div>
+<div class="sourceCode" id="cb11"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" tabindex="-1"></a><span class="fu">gvtrack.create</span>(<span class="st">&quot;myvtrack&quot;</span>, <span class="st">&quot;array_track&quot;</span>, <span class="st">&quot;sum&quot;</span>)</span>
+<span id="cb11-2"><a href="#cb11-2" tabindex="-1"></a><span class="fu">gvtrack.array.slice</span>(<span class="st">&quot;myvtrack&quot;</span>, <span class="fu">c</span>(<span class="st">&quot;col2&quot;</span>, <span class="st">&quot;col5&quot;</span>), <span class="st">&quot;max&quot;</span>)</span></code></pre></div>
 <p>In this example we create a virtual track based on
 <code>array_track</code>. Assume that an iterator interval <span class="math inline">\(I\)</span> covers <span class="math inline">\(n\)</span> different intervals in
 <code>array_track</code>: <span class="math inline">\(I_0, ...,
@@ -1027,15 +1203,15 @@ a value of the track in column <span class="math inline">\(j\)</span>
 for interval <span class="math inline">\(I_i\)</span>.</p>
 <p>Virtual tracks allow also to alter the iterator interval “on the
 fly”:</p>
-<div class="sourceCode" id="cb10"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" tabindex="-1"></a><span class="fu">gvtrack.iterator</span>(<span class="st">&quot;myvtrack&quot;</span>, <span class="at">sshift =</span> <span class="sc">-</span><span class="dv">100</span>, <span class="at">eshift =</span> <span class="dv">200</span>)</span></code></pre></div>
+<div class="sourceCode" id="cb12"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" tabindex="-1"></a><span class="fu">gvtrack.iterator</span>(<span class="st">&quot;myvtrack&quot;</span>, <span class="at">sshift =</span> <span class="sc">-</span><span class="dv">100</span>, <span class="at">eshift =</span> <span class="dv">200</span>)</span></code></pre></div>
 <p>In this example we expand each iterator interval by adding -100 to
 its <code>start</code> coordinate and 200 to its <code>end</code>
 coordinate.</p>
 <p>Similarly, iterator modifiers can be defined for 2D intervals.
 Moreover, an iterator modifier can create a 1D interval from a 2D
 iterator interval by projecting one of its axes.</p>
-<div class="sourceCode" id="cb11"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" tabindex="-1"></a><span class="fu">gvtrack.create</span>(<span class="st">&quot;myvtrack&quot;</span>, <span class="st">&quot;dense_track&quot;</span>)</span>
-<span id="cb11-2"><a href="#cb11-2" tabindex="-1"></a><span class="fu">gvtrack.iterator</span>(<span class="st">&quot;myvtrack&quot;</span>, <span class="at">dim =</span> <span class="dv">2</span>)</span></code></pre></div>
+<div class="sourceCode" id="cb13"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" tabindex="-1"></a><span class="fu">gvtrack.create</span>(<span class="st">&quot;myvtrack&quot;</span>, <span class="st">&quot;dense_track&quot;</span>)</span>
+<span id="cb13-2"><a href="#cb13-2" tabindex="-1"></a><span class="fu">gvtrack.iterator</span>(<span class="st">&quot;myvtrack&quot;</span>, <span class="at">dim =</span> <span class="dv">2</span>)</span></code></pre></div>
 <p>It is important to remember that iterator modifiers transform the
 iterator interval only for the given virtual tracks. Assume an iterator
 interval <span class="math inline">\(I\)</span> and two virtual tracks
@@ -1048,15 +1224,51 @@ intervals.</p>
 a virtual track. We can also use intervals as a source. In this case,
 the value of the virtual track will be some function that takes into
 account the “source” intervals and the current iterator interval.</p>
-<div class="sourceCode" id="cb12"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" tabindex="-1"></a><span class="fu">gvtrack.create</span>(<span class="st">&quot;myvtrack&quot;</span>, <span class="st">&quot;annotations&quot;</span>, <span class="st">&quot;distance&quot;</span>)</span>
-<span id="cb12-2"><a href="#cb12-2" tabindex="-1"></a>intervs <span class="ot">&lt;-</span> <span class="fu">gscreen</span>(<span class="st">&quot;dense_track &gt; 0.45&quot;</span>)</span>
-<span id="cb12-3"><a href="#cb12-3" tabindex="-1"></a><span class="fu">gextract</span>(<span class="st">&quot;myvtrack&quot;</span>, .misha<span class="sc">$</span>ALLGENOME, <span class="at">iterator =</span> intervs)</span></code></pre></div>
+<div class="sourceCode" id="cb14"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" tabindex="-1"></a><span class="fu">gvtrack.create</span>(<span class="st">&quot;myvtrack&quot;</span>, <span class="st">&quot;annotations&quot;</span>, <span class="st">&quot;distance&quot;</span>)</span>
+<span id="cb14-2"><a href="#cb14-2" tabindex="-1"></a>intervs <span class="ot">&lt;-</span> <span class="fu">gscreen</span>(<span class="st">&quot;dense_track &gt; 0.45&quot;</span>)</span>
+<span id="cb14-3"><a href="#cb14-3" tabindex="-1"></a><span class="fu">gextract</span>(<span class="st">&quot;myvtrack&quot;</span>, .misha<span class="sc">$</span>ALLGENOME, <span class="at">iterator =</span> intervs)</span></code></pre></div>
 <p>In this example <code>myvtrack</code> returns the minimal distance
 between intervals from an interval set <code>annotations</code> and the
 center of the current iterator interval from <code>intervs</code>.</p>
+<div id="value-based-tracks" class="section level4">
+<h4>Value-Based Tracks</h4>
+<p>In addition to using database tracks and interval sets as sources,
+virtual tracks can also use <strong>value-based tracks</strong> as
+sources. Value-based tracks are data frames containing genomic intervals
+with associated numeric values. They function as in-memory sparse tracks
+without requiring track creation in the database.</p>
+<p>To create a value-based virtual track, provide a data frame with
+columns <code>chrom</code>, <code>start</code>, <code>end</code>, and
+one numeric value column (any column name is acceptable):</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb15-1"><a href="#cb15-1" tabindex="-1"></a><span class="co"># Create a data frame with intervals and numeric values</span></span>
+<span id="cb15-2"><a href="#cb15-2" tabindex="-1"></a>intervals_with_values <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
+<span id="cb15-3"><a href="#cb15-3" tabindex="-1"></a>    <span class="at">chrom =</span> <span class="st">&quot;chr1&quot;</span>,</span>
+<span id="cb15-4"><a href="#cb15-4" tabindex="-1"></a>    <span class="at">start =</span> <span class="fu">c</span>(<span class="dv">100</span>, <span class="dv">300</span>, <span class="dv">500</span>),</span>
+<span id="cb15-5"><a href="#cb15-5" tabindex="-1"></a>    <span class="at">end =</span> <span class="fu">c</span>(<span class="dv">200</span>, <span class="dv">400</span>, <span class="dv">600</span>),</span>
+<span id="cb15-6"><a href="#cb15-6" tabindex="-1"></a>    <span class="at">score =</span> <span class="fu">c</span>(<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>)</span>
+<span id="cb15-7"><a href="#cb15-7" tabindex="-1"></a>)</span>
+<span id="cb15-8"><a href="#cb15-8" tabindex="-1"></a></span>
+<span id="cb15-9"><a href="#cb15-9" tabindex="-1"></a><span class="co"># Use as value-based sparse track</span></span>
+<span id="cb15-10"><a href="#cb15-10" tabindex="-1"></a><span class="fu">gvtrack.create</span>(<span class="st">&quot;myvtrack&quot;</span>, intervals_with_values, <span class="st">&quot;avg&quot;</span>)</span>
+<span id="cb15-11"><a href="#cb15-11" tabindex="-1"></a><span class="fu">gvtrack.create</span>(<span class="st">&quot;myvtrack_max&quot;</span>, intervals_with_values, <span class="st">&quot;max&quot;</span>)</span></code></pre></div>
+<p>Value-based tracks support all track-based summarizer functions
+(e.g., <code>avg</code>, <code>min</code>, <code>max</code>,
+<code>sum</code>, <code>stddev</code>, <code>quantile</code>,
+<code>nearest</code>, <code>exists</code>, <code>size</code>,
+<code>first</code>, <code>last</code>, <code>sample</code>, and position
+functions). However, they have one important restriction:
+<strong>intervals must not overlap</strong>. Unlike interval-based
+summarizers (which work with overlapping intervals), value-based tracks
+behave like sparse tracks and require non-overlapping intervals.</p>
+<p>Value-based tracks aggregate values using count-based averaging (each
+interval contributes equally regardless of length), matching the
+behavior of sparse tracks. This means when multiple intervals are
+covered by an iterator interval, each interval’s value contributes
+equally to the aggregation, regardless of the interval’s length.</p>
 <p>For a full list of supported functions please see
 <code>gvtrack.create</code> and <code>gvtrack.array.slice</code>
 functions.</p>
+</div>
 </div>
 <div id="administrating-virtual-tracks" class="section level3">
 <h3>Administrating Virtual Tracks</h3>
@@ -1118,7 +1330,7 @@ option. By default it equals to 1000. Altering this value (for instance
 setting it to 1) might significantly affect the run-time of various
 functions in the library. If you still wish to force the functions to
 define scalars rather than vectors, set <code>gbuf.size</code> to 1:</p>
-<div class="sourceCode" id="cb13"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" tabindex="-1"></a><span class="fu">options</span>(<span class="at">gbuf.size =</span> <span class="dv">1</span>)</span></code></pre></div>
+<div class="sourceCode" id="cb16"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb16-1"><a href="#cb16-1" tabindex="-1"></a><span class="fu">options</span>(<span class="at">gbuf.size =</span> <span class="dv">1</span>)</span></code></pre></div>
 <p>One might wonder why should we care about the fact that
 <code>mytrack</code> is not a scalar but rather a vector? Indeed in many
 cases it does not really matter. For example <code>mytrack * 3</code>
@@ -1275,7 +1487,7 @@ reported.</td>
 accept an additional set of intervals that limit the scope of a
 function. This scope also limits the iterator intervals. For
 instance:</p>
-<div class="sourceCode" id="cb14"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" tabindex="-1"></a><span class="fu">gextract</span>(<span class="st">&quot;dense_track&quot;</span>, <span class="fu">gintervals</span>(<span class="dv">2</span>, <span class="dv">340</span>, <span class="dv">520</span>))</span></code></pre></div>
+<div class="sourceCode" id="cb17"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb17-1"><a href="#cb17-1" tabindex="-1"></a><span class="fu">gextract</span>(<span class="st">&quot;dense_track&quot;</span>, <span class="fu">gintervals</span>(<span class="dv">2</span>, <span class="dv">340</span>, <span class="dv">520</span>))</span></code></pre></div>
 <p>As one can notice the first and the last intervals in the result are
 truncated by the scope <code>[340, 520)</code>.</p>
 <p>In some cases the combination of iterator policy and scope might
@@ -1317,11 +1529,11 @@ iterator interval is skipped as it lies outside of the band or the two
 chromosomes are not equal.</p>
 <p>The <code>gintervals.2d.band_intersect</code> function can help one
 better understand the concept:</p>
-<div class="sourceCode" id="cb15"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb15-1"><a href="#cb15-1" tabindex="-1"></a>intervs <span class="ot">&lt;-</span> <span class="fu">gintervals.2d</span>(<span class="dv">1</span>, <span class="dv">200</span>, <span class="dv">800</span>, <span class="dv">1</span>, <span class="dv">100</span>, <span class="dv">1000</span>)</span>
-<span id="cb15-2"><a href="#cb15-2" tabindex="-1"></a>intervs <span class="ot">&lt;-</span> <span class="fu">rbind</span>(intervs, <span class="fu">gintervals.2d</span>(<span class="dv">1</span>, <span class="dv">900</span>, <span class="dv">950</span>, <span class="dv">1</span>, <span class="dv">0</span>, <span class="dv">200</span>))</span>
-<span id="cb15-3"><a href="#cb15-3" tabindex="-1"></a>intervs <span class="ot">&lt;-</span> <span class="fu">rbind</span>(intervs, <span class="fu">gintervals.2d</span>(<span class="dv">1</span>, <span class="dv">0</span>, <span class="dv">100</span>, <span class="dv">1</span>, <span class="dv">0</span>, <span class="dv">400</span>))</span>
-<span id="cb15-4"><a href="#cb15-4" tabindex="-1"></a>intervs <span class="ot">&lt;-</span> <span class="fu">rbind</span>(intervs, <span class="fu">gintervals.2d</span>(<span class="dv">1</span>, <span class="dv">900</span>, <span class="dv">950</span>, <span class="dv">2</span>, <span class="dv">0</span>, <span class="dv">200</span>))</span>
-<span id="cb15-5"><a href="#cb15-5" tabindex="-1"></a>intervs</span></code></pre></div>
+<div class="sourceCode" id="cb18"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb18-1"><a href="#cb18-1" tabindex="-1"></a>intervs <span class="ot">&lt;-</span> <span class="fu">gintervals.2d</span>(<span class="dv">1</span>, <span class="dv">200</span>, <span class="dv">800</span>, <span class="dv">1</span>, <span class="dv">100</span>, <span class="dv">1000</span>)</span>
+<span id="cb18-2"><a href="#cb18-2" tabindex="-1"></a>intervs <span class="ot">&lt;-</span> <span class="fu">rbind</span>(intervs, <span class="fu">gintervals.2d</span>(<span class="dv">1</span>, <span class="dv">900</span>, <span class="dv">950</span>, <span class="dv">1</span>, <span class="dv">0</span>, <span class="dv">200</span>))</span>
+<span id="cb18-3"><a href="#cb18-3" tabindex="-1"></a>intervs <span class="ot">&lt;-</span> <span class="fu">rbind</span>(intervs, <span class="fu">gintervals.2d</span>(<span class="dv">1</span>, <span class="dv">0</span>, <span class="dv">100</span>, <span class="dv">1</span>, <span class="dv">0</span>, <span class="dv">400</span>))</span>
+<span id="cb18-4"><a href="#cb18-4" tabindex="-1"></a>intervs <span class="ot">&lt;-</span> <span class="fu">rbind</span>(intervs, <span class="fu">gintervals.2d</span>(<span class="dv">1</span>, <span class="dv">900</span>, <span class="dv">950</span>, <span class="dv">2</span>, <span class="dv">0</span>, <span class="dv">200</span>))</span>
+<span id="cb18-5"><a href="#cb18-5" tabindex="-1"></a>intervs</span></code></pre></div>
 <p><code>gintervals.2d.band_intersect</code> intersects the intervals
 with the band and returns the intervals shrunk to the minimal rectangle.
 As you can see we have four different intervals. The first one
@@ -1335,13 +1547,13 @@ different chromosomes and therefore is also filtered out.</p>
 <p>As said band filters out and alters 2D iterator intervals. Yet it
 also affects the result of 2D tracks. Let’s look at the following
 example:</p>
-<div class="sourceCode" id="cb16"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb16-1"><a href="#cb16-1" tabindex="-1"></a>intervs <span class="ot">&lt;-</span> <span class="fu">gintervals.2d</span>(<span class="dv">1</span>, <span class="fu">c</span>(<span class="dv">100</span>, <span class="dv">400</span>), <span class="fu">c</span>(<span class="dv">300</span>, <span class="dv">490</span>), <span class="dv">1</span>, <span class="fu">c</span>(<span class="dv">120</span>, <span class="dv">180</span>), <span class="fu">c</span>(<span class="dv">200</span>, <span class="dv">500</span>))</span>
-<span id="cb16-2"><a href="#cb16-2" tabindex="-1"></a><span class="fu">gtrack.2d.create</span>(<span class="st">&quot;test2d&quot;</span>, <span class="st">&quot;test 2D track&quot;</span>, intervs, <span class="fu">c</span>(<span class="dv">10</span>, <span class="dv">20</span>))</span>
-<span id="cb16-3"><a href="#cb16-3" tabindex="-1"></a><span class="fu">gextract</span>(<span class="st">&quot;test2d&quot;</span>, .misha<span class="sc">$</span>ALLGENOME)</span>
-<span id="cb16-4"><a href="#cb16-4" tabindex="-1"></a><span class="fu">gextract</span>(<span class="st">&quot;test2d&quot;</span>, .misha<span class="sc">$</span>ALLGENOME, <span class="at">iterator =</span> <span class="fu">gintervals.2d</span>(<span class="dv">1</span>, <span class="dv">0</span>, <span class="dv">1000</span>, <span class="dv">1</span>, <span class="dv">0</span>, <span class="dv">1000</span>))</span>
-<span id="cb16-5"><a href="#cb16-5" tabindex="-1"></a><span class="fu">gintervals.2d.band_intersect</span>(intervs, <span class="at">band =</span> <span class="fu">c</span>(<span class="dv">150</span>, <span class="dv">1000</span>))</span>
-<span id="cb16-6"><a href="#cb16-6" tabindex="-1"></a><span class="fu">gextract</span>(<span class="st">&quot;test2d&quot;</span>, .misha<span class="sc">$</span>ALLGENOME, <span class="at">iterator =</span> <span class="fu">gintervals.2d</span>(<span class="dv">1</span>, <span class="dv">0</span>, <span class="dv">1000</span>, <span class="dv">1</span>, <span class="dv">0</span>, <span class="dv">1000</span>), <span class="at">band =</span> <span class="fu">c</span>(<span class="dv">150</span>, <span class="dv">1000</span>))</span>
-<span id="cb16-7"><a href="#cb16-7" tabindex="-1"></a><span class="fu">gtrack.rm</span>(<span class="st">&quot;test2d&quot;</span>, <span class="at">force =</span> <span class="cn">TRUE</span>)</span></code></pre></div>
+<div class="sourceCode" id="cb19"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb19-1"><a href="#cb19-1" tabindex="-1"></a>intervs <span class="ot">&lt;-</span> <span class="fu">gintervals.2d</span>(<span class="dv">1</span>, <span class="fu">c</span>(<span class="dv">100</span>, <span class="dv">400</span>), <span class="fu">c</span>(<span class="dv">300</span>, <span class="dv">490</span>), <span class="dv">1</span>, <span class="fu">c</span>(<span class="dv">120</span>, <span class="dv">180</span>), <span class="fu">c</span>(<span class="dv">200</span>, <span class="dv">500</span>))</span>
+<span id="cb19-2"><a href="#cb19-2" tabindex="-1"></a><span class="fu">gtrack.2d.create</span>(<span class="st">&quot;test2d&quot;</span>, <span class="st">&quot;test 2D track&quot;</span>, intervs, <span class="fu">c</span>(<span class="dv">10</span>, <span class="dv">20</span>))</span>
+<span id="cb19-3"><a href="#cb19-3" tabindex="-1"></a><span class="fu">gextract</span>(<span class="st">&quot;test2d&quot;</span>, .misha<span class="sc">$</span>ALLGENOME)</span>
+<span id="cb19-4"><a href="#cb19-4" tabindex="-1"></a><span class="fu">gextract</span>(<span class="st">&quot;test2d&quot;</span>, .misha<span class="sc">$</span>ALLGENOME, <span class="at">iterator =</span> <span class="fu">gintervals.2d</span>(<span class="dv">1</span>, <span class="dv">0</span>, <span class="dv">1000</span>, <span class="dv">1</span>, <span class="dv">0</span>, <span class="dv">1000</span>))</span>
+<span id="cb19-5"><a href="#cb19-5" tabindex="-1"></a><span class="fu">gintervals.2d.band_intersect</span>(intervs, <span class="at">band =</span> <span class="fu">c</span>(<span class="dv">150</span>, <span class="dv">1000</span>))</span>
+<span id="cb19-6"><a href="#cb19-6" tabindex="-1"></a><span class="fu">gextract</span>(<span class="st">&quot;test2d&quot;</span>, .misha<span class="sc">$</span>ALLGENOME, <span class="at">iterator =</span> <span class="fu">gintervals.2d</span>(<span class="dv">1</span>, <span class="dv">0</span>, <span class="dv">1000</span>, <span class="dv">1</span>, <span class="dv">0</span>, <span class="dv">1000</span>), <span class="at">band =</span> <span class="fu">c</span>(<span class="dv">150</span>, <span class="dv">1000</span>))</span>
+<span id="cb19-7"><a href="#cb19-7" tabindex="-1"></a><span class="fu">gtrack.rm</span>(<span class="st">&quot;test2d&quot;</span>, <span class="at">force =</span> <span class="cn">TRUE</span>)</span></code></pre></div>
 <p>We created a 2D track <code>test2d</code> and inserted two values
 into it: <span class="math inline">\(10\)</span> and <span class="math inline">\(20\)</span>. If an iterator interval covers all
 the track’s rectangles, the resulted value of the track would be a
@@ -1367,11 +1579,11 @@ use of pseudo-random number generator. Each time the function is invoked
 a unique series of random numbers is issued. Hence two identical calls
 might produce different results. To guarantee reproducible results call
 <code>set.seed</code> before invoking the function.</p>
-<div class="sourceCode" id="cb17"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb17-1"><a href="#cb17-1" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">60427</span>)</span>
-<span id="cb17-2"><a href="#cb17-2" tabindex="-1"></a>r1 <span class="ot">&lt;-</span> <span class="fu">gsample</span>(<span class="st">&quot;dense_track&quot;</span>, <span class="dv">10</span>)</span>
-<span id="cb17-3"><a href="#cb17-3" tabindex="-1"></a>r2 <span class="ot">&lt;-</span> <span class="fu">gsample</span>(<span class="st">&quot;dense_track&quot;</span>, <span class="dv">10</span>) <span class="co"># r2 differs from r1</span></span>
-<span id="cb17-4"><a href="#cb17-4" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">60427</span>)</span>
-<span id="cb17-5"><a href="#cb17-5" tabindex="-1"></a>r3 <span class="ot">&lt;-</span> <span class="fu">gsample</span>(<span class="st">&quot;dense_track&quot;</span>, <span class="dv">10</span>) <span class="co"># r3 == r1</span></span></code></pre></div>
+<div class="sourceCode" id="cb20"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb20-1"><a href="#cb20-1" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">60427</span>)</span>
+<span id="cb20-2"><a href="#cb20-2" tabindex="-1"></a>r1 <span class="ot">&lt;-</span> <span class="fu">gsample</span>(<span class="st">&quot;dense_track&quot;</span>, <span class="dv">10</span>)</span>
+<span id="cb20-3"><a href="#cb20-3" tabindex="-1"></a>r2 <span class="ot">&lt;-</span> <span class="fu">gsample</span>(<span class="st">&quot;dense_track&quot;</span>, <span class="dv">10</span>) <span class="co"># r2 differs from r1</span></span>
+<span id="cb20-4"><a href="#cb20-4" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">60427</span>)</span>
+<span id="cb20-5"><a href="#cb20-5" tabindex="-1"></a>r3 <span class="ot">&lt;-</span> <span class="fu">gsample</span>(<span class="st">&quot;dense_track&quot;</span>, <span class="dv">10</span>) <span class="co"># r3 == r1</span></span></code></pre></div>
 </div>
 <div id="multitasking" class="section level2">
 <h2>Multitasking</h2>
@@ -1387,6 +1599,54 @@ of processes per CPU core) and <code>gmin.scope4process</code> (minimal
 scope range / surface assigned to a process). Multitasking can also be
 completely switched off by setting <code>gmultitasking</code> parameter
 to <code>FALSE</code>.</p>
+</div>
+<div id="auto-configuration" class="section level3">
+<h3>Auto-Configuration</h3>
+<p>The <code>misha</code> package automatically configures itself based
+on your system’s resources when loaded. This happens transparently
+without any user intervention:</p>
+<p><strong>Automatic Process Limits:</strong> The package detects the
+number of CPU cores and sets <code>gmax.processes = 70% of cores</code>.
+This ensures optimal parallelism while leaving headroom for the system.
+For example: - On a 4-core laptop: <code>gmax.processes = 2</code> (70%
+of 4) - On a 16-core workstation: <code>gmax.processes = 11</code> (70%
+of 16) - On a 128-core server: <code>gmax.processes = 89</code> (70% of
+128)</p>
+<p><strong>Automatic Buffer Size:</strong> The package coordinates
+buffer size with process limits to ensure
+<code>gmax.processes * gmax.data.size &lt;= 70% of RAM</code>.
+Specifically, it sets
+<code>gmax.data.size = min((RAM * 0.7) / gmax.processes, 10GB)</code>.
+This ensures that when all processes are running at full capacity, total
+memory usage stays within safe limits. For example: - On a 4-core, 8GB
+laptop: <code>gmax.processes = 2</code>,
+<code>gmax.data.size = 2.8GB</code> (total: 5.6GB = 70% of 8GB) - On a
+16-core, 32GB workstation: <code>gmax.processes = 11</code>,
+<code>gmax.data.size = 2.0GB</code> (total: 22.4GB = 70% of 32GB) - On a
+128-core, 256GB server: <code>gmax.processes = 89</code>,
+<code>gmax.data.size = 2.0GB</code> (total: 179.2GB = 70% of 256GB)</p>
+<p>The 10GB cap is empirically determined - larger shared memory
+allocations can fail even when system limits appear to allow them. This
+cap is rarely hit on multi-core systems due to the per-process
+division.</p>
+<p><strong>Automatic Small Dataset Detection:</strong> The package
+automatically detects small datasets and uses single-threaded mode to
+avoid fork overhead. The threshold scales with your system:
+<code>threshold = gmax.processes * 1000 records</code>. For example: -
+4-core laptop (2 procs): single-threaded below 2K records - 16-core
+workstation (11 procs): single-threaded below 11K records - 128-core
+server (89 procs): single-threaded below 89K records</p>
+<p>This dynamic threshold ensures fork overhead stays below 10% of
+runtime. For larger datasets, multitasking is automatically enabled when
+beneficial.</p>
+<p><strong>Manual Override:</strong> You can still manually set these
+options if needed:</p>
+<div class="sourceCode" id="cb21"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb21-1"><a href="#cb21-1" tabindex="-1"></a><span class="fu">options</span>(<span class="at">gmax.processes =</span> <span class="dv">32</span>)        <span class="co"># Override process limit</span></span>
+<span id="cb21-2"><a href="#cb21-2" tabindex="-1"></a><span class="fu">options</span>(<span class="at">gmax.data.size =</span> <span class="fl">5e9</span>)       <span class="co"># Override buffer size (5GB)</span></span>
+<span id="cb21-3"><a href="#cb21-3" tabindex="-1"></a><span class="fu">options</span>(<span class="at">gmultitasking =</span> <span class="cn">FALSE</span>)      <span class="co"># Disable multitasking entirely</span></span></code></pre></div>
+<p>To check current auto-configured values:</p>
+<div class="sourceCode" id="cb22"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb22-1"><a href="#cb22-1" tabindex="-1"></a><span class="fu">getOption</span>(<span class="st">&quot;gmax.processes&quot;</span>)         <span class="co"># Current process limit</span></span>
+<span id="cb22-2"><a href="#cb22-2" tabindex="-1"></a><span class="fu">getOption</span>(<span class="st">&quot;gmax.data.size&quot;</span>) <span class="sc">/</span> <span class="fl">1e9</span>   <span class="co"># Current buffer size in GB</span></span></code></pre></div>
 </div>
 <div id="limiting-the-memory-consumption" class="section level3">
 <h3>Limiting the Memory Consumption</h3>

@@ -44,7 +44,7 @@
 
 #     trackstr <- do.call(.gexpr2str, list(substitute(track)), envir = parent.frame())
 #     .iterator <- do.call(.giterator, list(substitute(iterator)), envir = parent.frame())
-#     trackdir <- sprintf("%s.track", paste(get("GWD", envir = .misha), gsub("\\.", "/", trackstr), sep = "/"))
+#     trackdir <- .track_dir(trackstr)
 
 #     direxisted <- file.exists(trackdir)
 
@@ -56,7 +56,7 @@
 #     success <- FALSE
 #     tryCatch(
 #         {
-#             colnames <- .gcall("gcreate_arrays_track", trackstr, minsize, maxsize, "1", intervals, .iterator, .misha_env(), silent = TRUE)
+#             colnames <- .gcall("gcreate_arrays_track", trackstr, minsize, maxsize, "1", intervals, .iterator, .misha_env())
 #             .gdb.add_track(trackstr)
 #             .gtrack.array.set_colnames(trackstr, colnames, FALSE)
 #             .gtrack.attr.set(trackstr, "created.by", ".gtrack.create_test_arrays", TRUE)
@@ -85,7 +85,7 @@
         stop("gtrack.array.get_colnames can only be applied to array tracks", call. = FALSE)
     }
 
-    trackdir <- sprintf("%s.track", paste(get("GWD", envir = .misha), gsub("\\.", "/", trackstr), sep = "/"))
+    trackdir <- .track_dir(trackstr)
     filename <- paste(trackdir, ".colnames", sep = "/")
 
     if (!file.exists(filename)) {
@@ -135,14 +135,12 @@
     colnames <- as.integer(1:length(names))
     names(colnames) <- names
 
-    trackdir <- sprintf("%s.track", paste(get("GWD", envir = .misha), gsub("\\.", "/", trackstr), sep = "/"))
+    trackdir <- .track_dir(trackstr)
     filename <- paste(trackdir, ".colnames", sep = "/")
     f <- file(filename, "wb")
     serialize(colnames, f)
     close(f)
 }
-
-
 
 
 #' Returns values from 'Array' track
@@ -245,7 +243,6 @@ gtrack.array.extract <- function(track = NULL, slice = NULL, intervals = NULL, f
 }
 
 
-
 #' Returns column names of array track
 #'
 #' Returns column names of array track.
@@ -274,7 +271,6 @@ gtrack.array.get_colnames <- function(track = NULL) {
     trackstr <- do.call(.gexpr2str, list(substitute(track)), envir = parent.frame())
     names(.gtrack.array.get_colnames(trackstr))
 }
-
 
 
 #' Creates an array track from array tracks or files
@@ -361,7 +357,7 @@ gtrack.array.import <- function(track = NULL, description = NULL, ...) {
         }
     }
 
-    trackdir <- sprintf("%s.track", paste(get("GWD", envir = .misha), gsub("\\.", "/", trackstr), sep = "/"))
+    trackdir <- .track_dir(trackstr)
 
     direxisted <- file.exists(trackdir)
 
@@ -373,7 +369,7 @@ gtrack.array.import <- function(track = NULL, description = NULL, ...) {
     success <- FALSE
     tryCatch(
         {
-            colnames <- .gcall("garrays_import", trackstr, srcs, colnames, .misha_env(), silent = TRUE)
+            colnames <- .gcall("garrays_import", trackstr, srcs, colnames, .misha_env())
             .gdb.add_track(trackstr)
             .gtrack.array.set_colnames(trackstr, colnames, FALSE)
             created.by <- sprintf("gtrack.array.import(\"%s\", description, src = c(\"%s\"))", trackstr, paste(srcs, collapse = "\", \""))
@@ -392,7 +388,6 @@ gtrack.array.import <- function(track = NULL, description = NULL, ...) {
     )
     retv <- 0 # suppress return value
 }
-
 
 
 #' Sets column names of array track

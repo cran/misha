@@ -1,3 +1,114 @@
+# misha 5.3.0
+
+* **Multi-contig support**: Added support for genomes with many contigs (100+) through new indexed database format
+  - New indexed format (default): Uses unified `genome.seq` + `genome.idx` files instead of per-chromosome files
+  - Dramatically reduces file descriptor usage for genomes with many contigs
+  - Provides 4-14% performance improvement for large-scale analyses
+  - Removes the requirement for "chr" prefix in chromosome names.
+  - **Backward compatible**: Legacy per-chromosome format fully supported
+  - Automatic format detection - no user action required
+  - New functions: `gdb.info()`, `gdb.convert_to_indexed()`, `gtrack.convert_to_indexed()`, `gintervals.convert_to_indexed()`, `gintervals.2d.convert_to_indexed()`
+  - Set `options(gmulticontig.indexed_format = FALSE)` to create databases in legacy format for compatibility with older misha versions
+  - See `vignette("Database-Formats")` for more details.
+* **Auto-configuration**: Package now automatically configures itself based on system resources
+  - `gmax.processes` automatically set to 70% of available CPU cores
+  - `gmax.data.size` coordinated with process limits to ensure total memory usage <= 70% of RAM (capped at 10GB per process)
+  - Formula: `gmax.data.size = min((RAM * 0.7) / gmax.processes, 10GB)` ensures safe memory usage across all parallel processes
+  - Dynamic auto-disable threshold: small datasets automatically use single-threaded mode to avoid fork overhead
+  - Threshold scales with system: `gmax.processes * 1000 records` (e.g., 2K on laptops, 89K on 128-core servers)
+  - Manual override still supported via `options()`
+  - See "Auto-Configuration" section in `vignette("Manual")` for details
+* Added in-memory value-based virtual tracks (`gvtrack.create` with `src` parameter). These tracks behave exactly like regular sparse tracks, but are stored in memory and can be used in track expressions.
+* Added `sshift`, `eshift` and `filter` parameters to `gvtrack.create`.
+* Added `gintervals.path()` and `gtrack.path()` functions that return the actual file system paths for interval sets and tracks. 
+* Added `masked.count` and `masked.frac` virtual track functions that count and fraction masked base pairs (lowercase letters) in the current iterator interval.
+* Added `distance.edge` virtual track function that computes edge-to-edge distance from the iterator interval to the closest source interval, using the same calculation as `gintervals.neighbors`. 
+
+# misha 5.2.2
+
+* Fix: `gtrack.liftover` did not fill chromosomes missing the chain with NA values. This caused errors when trying to access the tracks afterwards.
+
+# misha 5.2.1
+
+* Added `gintervals.as_chain` function that converts a data frame to a chain object.
+* Added value column aggregation support to `gintervals.liftover` via `value_col` and `multi_target_agg` parameters.
+
+# misha 5.2.0
+
+* Added `src_overlap_policy` and `tgt_overlap_policy` parameters to `gintervals.liftover`, `gintervals.load_chain`, and `gtrack.liftover` functions.
+* Added target aggregation in `gtrack.liftover` via `multi_target_agg` parameter.
+* `gintervals.load_chain` now returns valid misha intervals instead of a chain object.
+* Added score-based liftover functionality matching UCSC liftOver behavior:
+  - `gintervals.load_chain` now includes `score` and `chain_id` columns for all loaded chains
+  - New `min_score` parameter in `gintervals.load_chain`, `gintervals.liftover`, and `gtrack.liftover` filters out low-quality chains
+  - New `tgt_overlap_policy = "auto_score"` (or `"auto"`) selects the best chain mapping based on alignment score (highest score → longest span → lowest chain_id)
+  - New `include_metadata` parameter in `gintervals.liftover` optionally returns score and chain_id for each mapping
+  **BREAKING**: "auto" is now an alias for "auto_score". For the old behavior, use `tgt_overlap_policy = "auto_first"`.
+* Added `canonic` parameter to `gintervals.liftover` (default `FALSE`) to merge adjacent target intervals resulting from the same source interval and chain.
+* Added three clustering strategies for liftover target overlap policies:
+  - `tgt_overlap_policy = "best_cluster_union"` (default, aliased as `"best_source_cluster"`): Uses source union coverage
+  - `tgt_overlap_policy = "best_cluster_sum"`: Uses sum of target lengths
+  - `tgt_overlap_policy = "best_cluster_max"`: Uses longest single member
+
+# misha 5.1.4
+
+* Added new virtual track functions:
+  - `max.pos.abs`, `max.pos.relative`, `min.pos.abs`, `min.pos.relative`: Returns the position of the maximum/minimum value in the iterator interval
+  - `exists`: Returns 1 if any value exists (or specific vals if provided), 0 otherwise
+  - `size`: Returns the number of non-NaN values in the iterator interval
+  - `sample`: Returns a uniformly sampled source value from the iterator interval
+  - `sample.pos.abs` and `sample.pos.relative`: Returns the position of a uniformly sampled value
+  - `first` and `last`: Returns the first/last value in the iterator interval
+  - `first.pos.abs`, `first.pos.relative`, `last.pos.abs`, `last.pos.relative`: Returns the position of the first/last value
+
+# misha 5.1.3
+
+* Fixed a bug in `gintervals.neighbors` when using `mindist=0, maxdist=0`: the function would miss zero-distance (touching) intervals when using `mindist=0, maxdist=0`.
+* Fixed error reporting in multitasking mode: when a child process ends unexpectedly, the error message is now correctly reported to the parent process.
+* Fixed `pwm.count` with spatial sliding windows double-counting bidirectional hits (forward + reverse) at the same genomic position; the sliding path now matches the baseline per-position union semantics.
+
+# misha 5.1.2
+
+* **BREAKING**: `gintervals.load_chain` now returns a data frame with 8 columns instead of 7. Columns are: `chrom`, `start`, `end`, `strand`, `chromsrc`, `startsrc`, `endsrc`, `strandsrc`.
+* Added `src_overlap_policy` and `tgt_overlap_policy` parameters to `gintervals.load_chain`, `gtrack.liftover` and `gintervals.liftover` functions.
+* Added `neighbor.count` virtual track.
+* Added `gintervals.mark_overlaps` function that marks overlapping intervals with a group ID.
+
+# misha 5.1.1
+
+* Allow data frames as input in `pssm` parameter of `gvtrack.create` and `gseq.pwm` functions.
+* Implemented parallelism in `gseq.pwm` and added `neutral_chars_policy` parameter.
+* Implemented sliding window optimization for PWM scoring modes (`pwm`, `pwm.max` and `pwm.count`) for dense iterators when spatial weighting is disabled, providing significant performance improvements for consecutive genomic intervals.
+* **BREAKING**: `pwm.count(bidirect=TRUE)` now counts **per-position union** of strands (via log-sum-exp), aligning with `pwm`/`pwm.max`. Each position contributes at most 1 to the count. To reproduce the old per-strand-sum behavior, add the two strand-specific counts: `pwm.count(bidirect=FALSE, strand=1) + pwm.count(bidirect=FALSE, strand=-1)`.
+
+# misha 5.1.0
+
+* Added `gseq.pwm` and `gseq.kmer` functions that compute pwm and kmer scores on sequences without the need for a genome database.
+* Added `gseq.rev` and `gseq.comp` functions that reverse and complement DNA sequences without the need for a genome database.
+* Added `gseq.revcomp` alias for `grevcomp` function.
+* Added `gintervals.random` function that generates random genome intervals.
+* Added `gintervals.covered_bp` and `gintervals.coverage_fraction` functions that calculate the number of base pairs and the fraction of base pairs covered by a set of intervals.
+
+# misha 5.0.0
+
+* Added `gvtrack.filters`: per vtrack genomic masks.
+
+# misha 4.3.14
+
+* Added spatial factors to pwm virtual tracks.
+* Added `pwm.count` virtual track function that counts the number of occurrences of a PWM in the current iterator interval.
+
+# misha 4.3.13
+
+* Added directional neighbor finding functions:
+  - `gintervals.neighbors.upstream()` - Find upstream neighbors relative to query strand
+  - `gintervals.neighbors.downstream()` - Find downstream neighbors relative to query strand  
+  - `gintervals.neighbors.directional()` - Find both upstream and downstream neighbors
+* Added `use_intervals1_strand` parameter to `gintervals.neighbors()` to use query intervals' strand for distance directionality.
+* Added `warn.ignored.strand` parameter to `gintervals.neighbors()` to control warnings when query strand is ignored.
+* Fixed a bug in `gintervals.neighbors`: a stack imbalance in the C++ code in very rare cases of 2D intervals.
+* Fixed errors in regression tests of `gintervals.neighbors` due to unbalanced `rprotect` calls.
+
 # misha 4.3.12
 
 * Added `gintervals.normalize` and `gintervals.annotate` functions.

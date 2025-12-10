@@ -1,11 +1,27 @@
 #include "KmerCounter.h"
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <limits>
 
-KmerCounter::KmerCounter(const std::string &kmer, const std::string &genome_root, 
+KmerCounter::KmerCounter(const std::string &kmer, const std::string &genome_root,
                         CountMode mode, bool extend, char strand)
     : GenomeSeqScorer(genome_root, extend, strand), m_kmer(kmer), m_mode(mode)
+{
+    // Validate kmer
+    if (m_kmer.empty())
+    {
+        rdb::verror("Kmer string cannot be empty");
+    }
+
+    // Convert kmer to uppercase
+    std::transform(m_kmer.begin(), m_kmer.end(), m_kmer.begin(),
+                   [](unsigned char c) { return std::toupper(c); });
+}
+
+KmerCounter::KmerCounter(const std::string &kmer, GenomeSeqFetch* shared_seqfetch,
+                        CountMode mode, bool extend, char strand)
+    : GenomeSeqScorer(shared_seqfetch, extend, strand), m_kmer(kmer), m_mode(mode)
 {
     // Validate kmer
     if (m_kmer.empty())
@@ -84,7 +100,7 @@ size_t KmerCounter::count_in_interval(const GInterval &fetch_interval, const Gen
     std::vector<char> seq;
     try
     {
-        m_seqfetch.read_interval(fetch_interval, chromkey, seq);
+        m_seqfetch_ptr->read_interval(fetch_interval, chromkey, seq);
 
         // If sequence is too short to contain even one kmer
         if (seq.size() < m_kmer.length())
@@ -123,11 +139,16 @@ size_t KmerCounter::count_in_interval(const GInterval &fetch_interval, const Gen
 
         // Count occurrences of kmer in the sequence
         // Only count kmers whose start position falls within the original interval
+        const char* target_data = target.data();
+        const char* kmer_data = m_kmer.data();
+        const size_t kmer_len = m_kmer.length();
+
         for (size_t pos = original_start_pos;
-             pos < original_end_pos && pos <= target.length() - m_kmer.length();
+             pos < original_end_pos && pos <= target.length() - kmer_len;
              pos++)
         {
-            if (target.compare(pos, m_kmer.length(), m_kmer) == 0)
+            // Use memcmp for faster fixed-length comparison
+            if (std::memcmp(target_data + pos, kmer_data, kmer_len) == 0)
             {
                 count++;
             }
@@ -143,5 +164,67 @@ size_t KmerCounter::count_in_interval(const GInterval &fetch_interval, const Gen
     {
         // Catch any other standard exceptions
         return 0;
+    }
+}
+
+float KmerCounter::score_from_positions(const std::vector<size_t> &fwd_positions,
+                                        const std::vector<size_t> &rev_positions,
+                                        const GInterval &original_interval,
+                                        const GInterval &fetch_interval) const
+{
+    // Calculate the bounds within the fetched sequence that correspond to the original interval
+    size_t original_start_pos = 0;
+    if (fetch_interval.start < original_interval.start) {
+        original_start_pos = original_interval.start - fetch_interval.start;
+    }
+
+    size_t original_end_pos = fetch_interval.end - fetch_interval.start;
+    if (fetch_interval.end > original_interval.end) {
+        original_end_pos = original_end_pos - (fetch_interval.end - original_interval.end);
+    }
+
+    size_t kmer_len = m_kmer.length();
+
+    // Count positions based on strand parameter
+    size_t total_count = 0;
+    size_t total_possible_positions = 0;
+
+    // Count forward strand if needed
+    if (m_strand == 0 || m_strand == 1) {
+        size_t fwd_count = 0;
+        for (size_t pos : fwd_positions) {
+            if (pos >= original_start_pos && pos < original_end_pos) {
+                fwd_count++;
+            }
+        }
+        total_count += fwd_count;
+
+        // Calculate possible positions for forward strand
+        size_t possible = original_end_pos > original_start_pos ? original_end_pos - original_start_pos : 0;
+        size_t valid_fwd = possible > kmer_len - 1 ? possible - (kmer_len - 1) : 0;
+        total_possible_positions += valid_fwd;
+    }
+
+    // Count reverse strand if needed
+    if (m_strand == 0 || m_strand == -1) {
+        size_t rev_count = 0;
+        for (size_t pos : rev_positions) {
+            if (pos >= original_start_pos && pos < original_end_pos) {
+                rev_count++;
+            }
+        }
+        total_count += rev_count;
+
+        // Calculate possible positions for reverse strand
+        size_t possible = original_end_pos > original_start_pos ? original_end_pos - original_start_pos : 0;
+        size_t valid_rev = possible > kmer_len - 1 ? possible - (kmer_len - 1) : 0;
+        total_possible_positions += valid_rev;
+    }
+
+    // Return based on mode
+    if (m_mode == FRACTION) {
+        return total_possible_positions > 0 ? static_cast<float>(total_count) / total_possible_positions : 0.0f;
+    } else {
+        return static_cast<float>(total_count);
     }
 }

@@ -9,6 +9,7 @@
 #define GENOMETRACK1D_H_
 
 #include <cstdint>
+#include <limits>
 #include "GenomeTrack.h"
 #include "GInterval.h"
 #include "StreamPercentiler.h"
@@ -17,7 +18,7 @@
 
 class GenomeTrack1D : public GenomeTrack {
 public:
-	enum Functions { AVG, MIN, MAX, NEAREST, STDDEV, SUM, NUM_FUNCS };
+	enum Functions { AVG, MIN, MAX, NEAREST, STDDEV, SUM, MAX_POS, MIN_POS, EXISTS, SIZE, SAMPLE, SAMPLE_POS, FIRST, FIRST_POS, LAST, LAST_POS, NUM_FUNCS };
 
 	virtual ~GenomeTrack1D() {}
 
@@ -31,10 +32,23 @@ public:
 	float last_avg() const { return m_last_avg; }
 	float last_min() const { return m_last_min; }
 	float last_max() const { return m_last_max; }
+	virtual double last_max_pos() const = 0;
+	virtual double last_min_pos() const = 0;
 	float last_nearest() const { return m_last_nearest; }
 	float last_stddev() const { return m_last_stddev; }
 	float last_sum() const { return m_last_sum; }
 	float last_quantile(double percentile);
+	float last_exists() const { return m_last_exists; }
+	float last_size() const { return m_last_size; }
+	float last_sample() const { return m_last_sample; }
+	double last_sample_pos() const { return m_last_sample_pos; }
+	float last_first() const { return m_last_first; }
+	double last_first_pos() const { return m_last_first_pos; }
+	float last_last() const { return m_last_last; }
+	double last_last_pos() const { return m_last_last_pos; }
+
+	// Access to stream percentiler for combining quantiles across intervals
+	const StreamPercentiler<float>& get_percentiler() const { return m_sp; }
 
 	const string &file_name() const { return m_bfile.file_name(); }
 
@@ -46,12 +60,29 @@ protected:
 	float        m_last_avg;
 	float        m_last_min;
 	float        m_last_max;
+	double       m_last_max_pos;
+	double       m_last_min_pos;
 	float        m_last_nearest;
 	float        m_last_stddev;
 	float        m_last_sum;
+	float        m_last_exists;
+	float        m_last_size;
+	float        m_last_sample;
+	double       m_last_sample_pos;
+	float        m_last_first;
+	double       m_last_first_pos;
+	float        m_last_last;
+	double       m_last_last_pos;
 	StreamPercentiler<float> m_sp;
 
-	GenomeTrack1D(Type type) : GenomeTrack(type), m_use_quantile(false) { m_functions.resize(NUM_FUNCS, false); }
+	GenomeTrack1D(Type type) : GenomeTrack(type), m_use_quantile(false) {
+		m_functions.resize(NUM_FUNCS, false);
+		m_last_max_pos = numeric_limits<double>::quiet_NaN();
+		m_last_min_pos = numeric_limits<double>::quiet_NaN();
+		m_last_sample_pos = numeric_limits<double>::quiet_NaN();
+		m_last_first_pos = numeric_limits<double>::quiet_NaN();
+		m_last_last_pos = numeric_limits<double>::quiet_NaN();
+	}
 };
 
 

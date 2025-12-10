@@ -1,13 +1,14 @@
 /*
  * rdbinterval.h
  *
- *  Created on: Jun 3, 2010
- *      Author: hoichman
+ * Created on: Jun 3, 2010
+ * Author: hoichman
  */
 
 #ifndef RDBINTERVAL_H_
 #define RDBINTERVAL_H_
 
+#include <cassert>
 #include <cstdint>
 #include <inttypes.h>
 #include <sys/types.h>
@@ -15,6 +16,12 @@
 #include <vector>
 
 using namespace std;
+
+// Forward declare MultitaskingMode enum from rdb namespace
+// (defined in rdbutils.h which includes this file)
+namespace rdb {
+	enum MultitaskingMode : int;
+}
 
 #include <list>
 #include <memory>
@@ -32,7 +39,23 @@ using namespace std;
 #include <R.h>
 #include <Rinternals.h>
 
+// Undefine R macros that conflict with C++ standard library
+#ifdef length
+#undef length
+#endif
+#ifdef error
+#undef error
+#endif
+#ifdef warning
+#undef warning
+#endif
+
 #include "GenomeTrack.h"
+#include "ConfigurationManager.h"
+#include "DataFrameUtils.h"
+#include "IntervalValidator.h"
+#include "ChainIntervalConverter.h"
+#include "IntervalConverter.h"
 
 namespace rdb {
 
@@ -54,11 +77,11 @@ struct IntervalPval : public GInterval {
 
 struct ChainInterval : public GInterval {
 	enum Errors { BAD_INTERVAL };
-	enum { CHROM_SRC = GInterval::NUM_COLS, START_SRC, NUM_COLS };
+	enum { STRAND = GInterval::NUM_COLS, CHROM_SRC, START_SRC, END_SRC, STRAND_SRC, CHAIN_ID, SCORE, NUM_COLS };
 
 	struct SrcCompare {
 		bool operator()(const ChainInterval &obj1, const ChainInterval &obj2) const;
-	};	
+	};
 
 	struct SetCompare {
 		bool operator()(const ChainInterval &obj1, const ChainInterval &obj2) const;
@@ -70,22 +93,52 @@ struct ChainInterval : public GInterval {
 
 	static const char *COL_NAMES[NUM_COLS];
 
-	int64_t start_src;
 	int     chromid_src;
+	int64_t start_src;
+	int64_t end_src;
+	int64_t strand_src;
+	int64_t chain_id;     // Monotonically increasing ID for stable sorting
+	double  score;        // Chain alignment score from header
 
-	ChainInterval() : GInterval(), start_src(-1), chromid_src(-1) {}
+	ChainInterval() : GInterval(), chromid_src(-1), start_src(-1), end_src(-1), strand_src(-1), chain_id(-1), score(0.0) {}
 
 	ChainInterval(int _chromid, int64_t _start, int64_t _end, int _chromid_src, int64_t _start_src) :
-		GInterval(_chromid, _start, _end, 0), start_src(_start_src), chromid_src(_chromid_src) {}
+		GInterval(_chromid, _start, _end, 0), chromid_src(_chromid_src), start_src(_start_src),
+		end_src(_start_src + (_end - _start)), strand_src(0), chain_id(-1), score(0.0) {}
+
+	ChainInterval(int _chromid, int64_t _start, int64_t _end, int _strand_tgt, int _chromid_src, int64_t _start_src, int64_t _strand_src) :
+		GInterval(_chromid, _start, _end, _strand_tgt), chromid_src(_chromid_src), start_src(_start_src),
+		end_src(_start_src + (_end - _start)), strand_src(_strand_src), chain_id(-1), score(0.0) {}
 
 	string tostring(const GenomeChromKey &chromkey, const vector<string> &src_id2chrom) const;
 
 	void verify(const GenomeChromKey &chromkey, const vector<string> &src_id2chrom, bool check_chrom_boundary = true) const;
 
+	// Helper function to compute end_src with overflow safety checks (debug builds)
+	static inline int64_t end_src_of(const ChainInterval& c) {
+		const int64_t len = c.end - c.start;
+		assert(len >= 0 && "Chain interval has negative length");
+		// Check for overflow: if adding len would overflow, result would be less than start_src
+		assert(c.start_src + len >= c.start_src && "Overflow in end_src calculation");
+		return c.start_src + len;
+	}
+
 	// returns true if source interval overlaps the given interval
 	bool do_overlap_src(const GInterval &interv) const {
-		return chromid_src == interv.chromid && max(start_src, interv.start) < min(start_src + end - start, interv.end);
+		return chromid_src == interv.chromid && max(start_src, interv.start) < min(end_src, interv.end);
 	}
+};
+
+struct ChainMappingMetadata {
+	double  score;
+	int64_t chain_id;
+	int     chromid_src;
+	int64_t start_src;
+	int64_t end_src;
+
+	ChainMappingMetadata() : score(0.0), chain_id(0), chromid_src(-1), start_src(-1), end_src(-1) {}
+	ChainMappingMetadata(double _score, int64_t _chain_id, int _chromid_src, int64_t _start_src, int64_t _end_src) : 
+		score(_score), chain_id(_chain_id), chromid_src(_chromid_src), start_src(_start_src), end_src(_end_src) {}
 };
 
 
@@ -95,12 +148,15 @@ class ChainIntervals : public std::vector<ChainInterval> {
 public:
 	enum Errors { OVERLAPPING_INTERVAL, UNSORTED_INTERVALS };
 
-	ChainIntervals() : std::vector<ChainInterval>() {}
-	ChainIntervals(size_type n) : std::vector<ChainInterval>(n) {}
-	ChainIntervals(const std::vector<ChainInterval> &v) : std::vector<ChainInterval>(v) {}
+	ChainIntervals() : std::vector<ChainInterval>(), m_tgt_overlap_policy("keep") {}
+	ChainIntervals(size_type n) : std::vector<ChainInterval>(n), m_tgt_overlap_policy("keep") {}
+	ChainIntervals(const std::vector<ChainInterval> &v) : std::vector<ChainInterval>(v), m_tgt_overlap_policy("keep") {}
 
 	void sort_by_src() { sort(begin(), end(), ChainInterval::SrcCompare()); }
 	void sort_by_tgt() { sort(begin(), end()); }
+
+	void set_tgt_overlap_policy(const string &policy) { m_tgt_overlap_policy = policy; }
+	const string& get_tgt_overlap_policy() const { return m_tgt_overlap_policy; }
 
 	// Verifies that there are no overlaps between the source intervals; if intervals overlap an exception is thrown.
 	// Intervals are expected to be already sorted by source.
@@ -110,14 +166,45 @@ public:
 	// Intervals are expected to be already sorted by target.
 	void verify_no_tgt_overlaps(const GenomeChromKey &chromkey, const vector<string> &src_id2chrom) const;
 
-	const_iterator map_interval(const GInterval &src_interval, GIntervals &tgt_intervs, const_iterator hint);
+	// Handles source overlaps according to the specified policy.
+	// Policy: "error" - throw exception, "keep" - allow overlaps, "discard" - remove all overlapping intervals.
+	// Intervals are expected to be already sorted by source.
+	void handle_src_overlaps(const string &policy, const GenomeChromKey &chromkey, const vector<string> &src_id2chrom);
+
+	// Handles target overlaps according to the specified policy.
+	// Policies:
+	//   "keep"        - keep overlaps unchanged (no trimming)
+	//   "error"       - throw on the first target overlap
+	//   "discard"     - drop any interval that participates in a target overlap
+	//   "auto_first"  - segment the union and keep the smallest chain_id in each overlapped segment
+	//   "auto_longer" - segment the union and keep the longest span in each overlapped segment (ties: score, then chain_id)
+	//   "auto_score"  - segment the union and keep the highest score in each overlapped segment (ties: span, then chain_id)
+	//   "agg"         - segment the union and keep all chains for overlapped segments (parallel slices)
+	// Intervals are expected to be already sorted by target.
+	void handle_tgt_overlaps(const string &policy, const GenomeChromKey &chromkey, const vector<string> &src_id2chrom);
+
+	const_iterator map_interval(const GInterval &src_interval, GIntervals &tgt_intervs, const_iterator hint, std::vector<ChainMappingMetadata> *metadata = NULL);
+
+	// Build auxiliary structures for efficient source interval mapping
+	void buildSrcAux();
+
+	// Get first/last indices for a given source chromosome
+	inline size_t chromFirst(int chromid_src) const { return m_chrom_first[chromid_src]; }
+	inline size_t chromLastExcl(int chromid_src) const { return m_chrom_last_excl[chromid_src]; }
 
 private:
+	// Auxiliary structures for efficient source interval mapping
+	std::vector<int64_t> m_pmax_end_src;        // prefix-max of end_src per chromosome
+	std::vector<size_t>  m_chrom_first;         // first index per chromid_src
+	std::vector<size_t>  m_chrom_last_excl;     // exclusive last index per chromid_src
+	int                  m_max_src_chromid = -1; // max source chromosome id
+	string               m_tgt_overlap_policy;   // target overlap policy for score-based selection
+
 	bool check_first_overlap_src(const const_iterator &iinterval1, const GInterval &interval2) {
 		return iinterval1->do_overlap_src(interval2) && (iinterval1 == begin() || !(iinterval1 - 1)->do_overlap_src(interval2));
 	}
 
-	const_iterator add2tgt(const_iterator hint, const GInterval &src_interval, GIntervals &tgt_intervs);
+	const_iterator add2tgt(const_iterator hint, const GInterval &src_interval, GIntervals &tgt_intervs, std::vector<ChainMappingMetadata> *metadata);
 };
 
 
@@ -143,89 +230,128 @@ public:
 
 	GIntervalsFetcher2D *get_kid_intervals2d();
 
-	unsigned get_rintervs_type_mask(SEXP rintervals, const char *error_msg_prefix = "") const;
+	unsigned get_rintervs_type_mask(SEXP rintervals, const char *error_msg_prefix = "") const {
+		return m_interval_converter.get_rintervs_type_mask(rintervals, error_msg_prefix);
+	}
 
 	// Converts R intervals (data frame with 4 columns or a string marking the filename) to a vector of Intervals.
 	// Returns R intervals in the form of data frame.
+	// If skip_missing_chroms is true and chromkey is provided, intervals with chromosomes not in chromkey are silently skipped.
 	SEXP convert_rintervs(SEXP rintervals, GIntervals *intervals, GIntervals2D *intervals2d, bool null_if_interv_nonexist = false,
-						  const GenomeChromKey *chromkey = NULL, const char *error_msg_prefix = "", unsigned *pintervs_type_mask = NULL, bool verify = true) const;
+						  const GenomeChromKey *chromkey = NULL, const char *error_msg_prefix = "", unsigned *pintervs_type_mask = NULL, bool verify = true, bool skip_missing_chroms = false) const {
+		return m_interval_converter.convert_rintervs(rintervals, intervals, intervals2d, null_if_interv_nonexist, chromkey, error_msg_prefix, pintervs_type_mask, verify, skip_missing_chroms);
+	}
 
 	// Returns intervals type mask
 	unsigned convert_rintervs(SEXP rintervals, GIntervalsFetcher1D **intervals, GIntervalsFetcher2D **intervals2d, bool null_if_interv_nonexist = false,
-							  const GenomeChromKey *chromkey = NULL, const char *error_msg_prefix = "", bool verify = true) const;
+							  const GenomeChromKey *chromkey = NULL, const char *error_msg_prefix = "", bool verify = true) const {
+		return m_interval_converter.convert_rintervs(rintervals, intervals, intervals2d, null_if_interv_nonexist, chromkey, error_msg_prefix, verify);
+	}
 
 	// Converts a vector of Intervals to R (data frame with 3 columns: chrom, start, end)
-	SEXP convert_intervs(GIntervalsFetcher1D *intervals, unsigned num_cols = GInterval::NUM_COLS, bool null_if_empty = true, bool use_original_index = false) const;
+	SEXP convert_intervs(GIntervalsFetcher1D *intervals, unsigned num_cols = GInterval::NUM_COLS, bool null_if_empty = true, bool use_original_index = false) const {
+		return m_interval_converter.convert_intervs(intervals, num_cols, null_if_empty, use_original_index);
+	}
 
 	// Converts a vector of Intervals to R (data frame with 6 columns: chrom1, start1, end1, chrom2, start2, end2)
-	SEXP convert_intervs(GIntervalsFetcher2D *intervals, unsigned num_cols = GInterval2D::NUM_COLS, bool null_if_empty = true, bool use_original_index = false) const;
+	SEXP convert_intervs(GIntervalsFetcher2D *intervals, unsigned num_cols = GInterval2D::NUM_COLS, bool null_if_empty = true, bool use_original_index = false) const {
+		return m_interval_converter.convert_intervs(intervals, num_cols, null_if_empty, use_original_index);
+	}
 
 	// Converts R chain intervals to a vector of ChainIntervals
-	void convert_rchain_intervs(SEXP chain, ChainIntervals &chain_intervs, vector<string> &src_id2chrom);
+	void convert_rchain_intervs(SEXP chain, ChainIntervals &chain_intervs, vector<string> &src_id2chrom) {
+		m_chain_converter.convert_rchain_intervs(chain, chain_intervs, src_id2chrom);
+	}
 
 	// Converts a vector of ChainIntervals to R
-	SEXP convert_chain_intervs(const ChainIntervals &chain_intervs, vector<string> &src_id2chrom);
+	SEXP convert_chain_intervs(const ChainIntervals &chain_intervs, vector<string> &src_id2chrom) {
+		return m_chain_converter.convert_chain_intervs(chain_intervs, src_id2chrom);
+	}
 
 	DiagonalBand convert_band(SEXP rband);
 
 	// Creates a data frame with given number or rows and columns. The data frame returned is still half baked.
 	// Column names and the columns themselves must be defined later manually or via define_data_frame_cols.
 	// If attrs_src is not R_NilValue, the attributes of the new data frame are copied from it.
-	SEXP create_data_frame(int numrows, int numcols, SEXP attrs_src = R_NilValue);
+	SEXP create_data_frame(int numrows, int numcols, SEXP attrs_src = R_NilValue) {
+		return DataFrameUtils::create_data_frame(numrows, numcols, attrs_src);
+	}
 
 	// Copies columns definitions from src (must be a data frame) to tgt starting from column 'tgt_col_offset'.
 	// tgt must be created by create_data_frame().
 	// No column values are copied though. This function creates only the vectors of columns and copies column names.
-	void define_data_frame_cols(SEXP src, vector<SEXP> &src_cols, SEXP tgt, vector<SEXP> &tgt_cols, int tgt_col_offset);
+	void define_data_frame_cols(SEXP src, vector<SEXP> &src_cols, SEXP tgt, vector<SEXP> &tgt_cols, int tgt_col_offset) {
+		DataFrameUtils::define_data_frame_cols(src, src_cols, tgt, tgt_cols, tgt_col_offset);
+	}
 
 	// Copies a row (values, not the definition) from src data frame to tgt data frame.
 	// Before calling this function src columns must be defined in tgt by calling define_data_frame_cols().
-	void copy_data_frame_row(const vector<SEXP> &src_cols, int src_row, const vector<SEXP> &tgt_cols, int tgt_row, int tgt_col_offset);
+	void copy_data_frame_row(const vector<SEXP> &src_cols, int src_row, const vector<SEXP> &tgt_cols, int tgt_row, int tgt_col_offset) {
+		DataFrameUtils::copy_data_frame_row(src_cols, src_row, tgt_cols, tgt_row, tgt_col_offset);
+	}
 
-	void copy_data_frame_rows(const vector<SEXP> &src_cols, int src_row, int num_rows, const vector<SEXP> &tgt_cols, int tgt_row, int tgt_col_offset);
+	void copy_data_frame_rows(const vector<SEXP> &src_cols, int src_row, int num_rows, const vector<SEXP> &tgt_cols, int tgt_row, int tgt_col_offset) {
+		DataFrameUtils::copy_data_frame_rows(src_cols, src_row, num_rows, tgt_cols, tgt_row, tgt_col_offset);
+	}
 
 	// Sets NAN at the given row and column of a data frame
-	void set_data_frame_val_nan(const vector<SEXP> &tgt_cols, int tgt_row, int tgt_col);
+	void set_data_frame_val_nan(const vector<SEXP> &tgt_cols, int tgt_row, int tgt_col) {
+		DataFrameUtils::set_data_frame_val_nan(tgt_cols, tgt_row, tgt_col);
+	}
 
 	// Verifies that the number of bins in each interval does not exceed the limit
-	void restrict_bins(int64_t maxbins, GIntervals &intervals, unsigned binsize) const;
+	void restrict_bins(int64_t maxbins, GIntervals &intervals, unsigned binsize) const {
+		m_validator.restrict_bins(maxbins, intervals, binsize);
+	}
 
 	// Returns true if multitasking is switched on
-	bool get_multitasking() const;
+	bool get_multitasking() const { return m_config.get_multitasking(); }
 
 	// Returns absolute maximal number of concurrently opened processes for parallel computation
-	uint64_t get_max_processes() const;
+	uint64_t get_max_processes() const { return m_config.get_max_processes(); }
 
 	// Returns the maximal number of concurrently opened processes per core for parallel computation
-	uint64_t get_max_processes2core() const;
+	uint64_t get_max_processes2core() const { return m_config.get_max_processes2core(); }
 
 	// Returns minimal scope range per process for parallel computation
-	uint64_t get_min_scope4process() const;
+	uint64_t get_min_scope4process() const { return m_config.get_min_scope4process(); }
+
+	// Returns minimal sequence workload per process for parallel computation (for gseq.pwm, gseq.kmer)
+	uint64_t get_min_seqs_work4process() const { return m_config.get_min_seqs_work4process(); }
 
 	// Returns the upper limit for data size
-	uint64_t get_max_data_size() const;
+	uint64_t get_max_data_size() const { return m_config.get_max_data_size(); }
 
 	// Returns the upper limit for memory usage
-	uint64_t get_max_mem_usage() const;
+	uint64_t get_max_mem_usage() const { return m_config.get_max_mem_usage(); }
 
 	// Returns the threshold for creating a big intervals set
-	uint64_t get_big_intervals_size() const;
+	uint64_t get_big_intervals_size() const { return m_config.get_big_intervals_size(); }
 
 	// Returns the size of the buffer used to store highest/lowest values for high-precision computation of quantiles
-	uint64_t get_quantile_edge_data_size() const;
+	uint64_t get_quantile_edge_data_size() const { return m_config.get_quantile_edge_data_size(); }
+
+	// Selects the appropriate multitasking mode based on estimated result size
+	// is_deterministic: true if result size can be known precisely before running
+	// estimated_size: estimated number of result records (intervals, values, etc.)
+	rdb::MultitaskingMode select_multitasking_mode(bool is_deterministic, uint64_t estimated_size) const {
+		return m_config.select_multitasking_mode(is_deterministic, estimated_size);
+	}
 
 	// Returns the chunk size of 2D track
-	uint64_t get_track_chunk_size() const;
+	uint64_t get_track_chunk_size() const { return m_config.get_track_chunk_size(); }
 
 	// Returns the chunk size of 2D track
-	uint64_t get_track_num_chunks() const;
+	uint64_t get_track_num_chunks() const { return m_config.get_track_num_chunks(); }
 
 	// Returns true if iterator is 1D
 	bool is_1d_iterator(SEXP rtrack_expr, GIntervalsFetcher1D *scope1d, GIntervalsFetcher2D *scope2d, SEXP riterator);
 
 	// Verifies that the data size does not exceed the maximum allowed.
 	// If check_all_kids == true then the limit is checked cumulatively for all child processes.
-	void verify_max_data_size(uint64_t data_size, const char *data_name = "Result", bool check_all_kids = true);
+	void verify_max_data_size(uint64_t data_size, const char *data_name = "Result", bool check_all_kids = true) {
+		m_config.verify_max_data_size(data_size, data_name, check_all_kids);
+	}
 
 	// returns true if the intervals set should be saved in a big set
 	bool needs_bigset(uint64_t num_intervs) { return num_intervs > get_big_intervals_size(); }
@@ -251,6 +377,11 @@ public:
 	bool distribute_task(uint64_t res_const_size,    // data size in bytes for all the result
 						 uint64_t res_record_size);  // size in bytes per datum in the result
 
+	// Overload with explicit mode parameter (for future use)
+	bool distribute_task(uint64_t res_const_size,    // data size in bytes for all the result
+						 uint64_t res_record_size,   // size in bytes per datum in the result
+						 rdb::MultitaskingMode mode);
+
 private:
 	GenomeChromKey                m_chrom_key;
 	SEXP                          m_envir;
@@ -260,16 +391,10 @@ private:
 	vector<GIntervalsFetcher2D *> m_kids_intervals2d;
 	GIntervalsFetcher1D          *m_kid_intervals1d;
 	GIntervalsFetcher2D          *m_kid_intervals2d;
-	mutable int                   m_multitasking;
-	mutable uint64_t              m_max_data_size{0};
-	mutable uint64_t              m_max_mem_usage{0};
-	mutable uint64_t              m_big_intervals_size{0};
-	mutable uint64_t              m_max_processes{0};
-	mutable uint64_t              m_max_processes2core{0};
-	mutable uint64_t              m_min_scope4process{0};
-	mutable uint64_t              m_quantile_edge_data_size{0};
-	mutable uint64_t              m_track_chunk_size{0};
-	mutable uint64_t              m_track_num_chunks{0};
+	ConfigurationManager          m_config;
+	IntervalValidator             m_validator;
+	ChainIntervalConverter         m_chain_converter;
+	IntervalConverter              m_interval_converter;
 
 	SEXP get_rallgenome1d() const { return VECTOR_ELT(m_allgenome, 0); }
 	SEXP get_rallgenome2d() const { return VECTOR_ELT(m_allgenome, 1); }
@@ -282,7 +407,28 @@ private:
 
 inline bool rdb::ChainInterval::SrcCompare::operator()(const ChainInterval &obj1, const ChainInterval &obj2) const
 {
-	return obj1.chromid_src < obj2.chromid_src || (obj1.chromid_src == obj2.chromid_src && obj1.start_src < obj2.start_src);
+	// Primary: source chromosome
+	if (obj1.chromid_src != obj2.chromid_src)
+		return obj1.chromid_src < obj2.chromid_src;
+
+	// Secondary: source start position
+	if (obj1.start_src != obj2.start_src)
+		return obj1.start_src < obj2.start_src;
+
+	// Tertiary: source end position (for deterministic ordering with same start)
+	if (obj1.end_src != obj2.end_src)
+		return obj1.end_src < obj2.end_src;
+
+	// Quaternary: target chromosome
+	if (obj1.chromid != obj2.chromid)
+		return obj1.chromid < obj2.chromid;
+
+	// Quinary: target start position
+	if (obj1.start != obj2.start)
+		return obj1.start < obj2.start;
+
+	// Final tiebreaker: chain_id (ensures total order and reproducibility)
+	return obj1.chain_id < obj2.chain_id;
 }
 
 inline bool rdb::ChainInterval::SetCompare::operator()(const ChainInterval &obj1, const ChainInterval &obj2) const
@@ -294,7 +440,8 @@ inline bool rdb::ChainInterval::SetCompare::operator()(const ChainInterval &obj1
 inline string rdb::ChainInterval::tostring(const GenomeChromKey &chromkey, const vector<string> &src_id2chrom) const
 {
     char buf[1000];
-    snprintf(buf, sizeof(buf), "(%s, %" PRId64 ", %" PRId64 ") <- (%s, %" PRId64 ")", chromkey.id2chrom(chromid).c_str(), start, end, src_id2chrom[chromid_src].c_str(), start_src);
+    snprintf(buf, sizeof(buf), "(%s, %" PRId64 ", %" PRId64 ") <- (%s, %" PRId64 ", %" PRId64 ") [chain_id=%" PRId64 ", score=%.0f]",
+             chromkey.id2chrom(chromid).c_str(), start, end, src_id2chrom[chromid_src].c_str(), start_src, end_src, chain_id, score);
     return string(buf);
 }
 
