@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <vector>
 
 #include "rdbinterval.h"
@@ -19,6 +20,11 @@
 #include "GIntervalsBigSet1D.h"
 #include "GIntervalsBigSet2D.h"
 #include "TrackExpressionScanner.h"
+#include "TrackExpressionFixedBinIterator.h"
+#include "TrackExpressionFixedRectIterator.h"
+#include "TrackExpressionIntervals1DIterator.h"
+#include "TrackExpressionSparseIterator.h"
+#include "TGLException.h"
 
 // Optional profiling for gextract_multitask hot path.
 // Enable by setting getOption("gextract.profile") to TRUE.
@@ -33,6 +39,78 @@ static void log_gextract_timing(const char *label, double ms) {
 
 using namespace std;
 using namespace rdb;
+
+static uint64_t estimate_records_for_expr(
+	IntervUtils &iu,
+	SEXP exprs,
+	GIntervalsFetcher1D *scope1d,
+	GIntervalsFetcher2D *scope2d,
+	SEXP iterator_policy,
+	SEXP band)
+{
+	uint64_t estimated = iu.estimate_num_bins(iterator_policy, scope1d, scope2d);
+	if (estimated)
+		return estimated;
+
+	// Try to infer iterator details when iterator policy is implicit.
+	TrackExprScanner scanner(iu);
+	TrackExpressionIteratorBase *expr_itr = scanner.create_expr_iterator(exprs, scope1d, scope2d, iterator_policy, band, true);
+
+	if (auto *bin_itr = dynamic_cast<TrackExpressionFixedBinIterator *>(expr_itr)) {
+		int64_t binsize = bin_itr->get_bin_size();
+		if (binsize > 0) {
+			SEXP rbinsize = PROTECT(Rf_ScalarReal((double)binsize));
+			estimated = iu.estimate_num_bins(rbinsize, scope1d, scope2d);
+			UNPROTECT(1);
+			return estimated;
+		}
+	}
+
+	if (auto *rect_itr = dynamic_cast<TrackExpressionFixedRectIterator *>(expr_itr)) {
+		int64_t width = rect_itr->get_width();
+		int64_t height = rect_itr->get_height();
+		if (width > 0 && height > 0) {
+			SEXP rrect = PROTECT(Rf_allocVector(REALSXP, 2));
+			REAL(rrect)[0] = (double)width;
+			REAL(rrect)[1] = (double)height;
+			estimated = iu.estimate_num_bins(rrect, scope1d, scope2d);
+			UNPROTECT(1);
+			return estimated;
+		}
+	}
+
+	if (dynamic_cast<TrackExpressionSparseIterator *>(expr_itr)) {
+		return 0;
+	}
+
+	// Intervals iterators can emit more records than the number of iterator intervals
+	// when a long iterator interval overlaps multiple scope intervals.
+	// Avoid underestimating shared-memory size by not capping in this case.
+	if (dynamic_cast<TrackExpressionIntervals1DIterator *>(expr_itr)) {
+		return 0;
+	}
+
+	return 0;
+}
+
+static uint64_t inflate_estimated_records(IntervUtils &iu, uint64_t estimated, double factor)
+{
+	if (!estimated)
+		return 0;
+
+	if (!(factor > 1.0))
+		return estimated;
+
+	long double inflated = (long double)estimated * factor;
+	long double max_records = (long double)iu.get_max_data_size();
+
+	if (inflated > max_records)
+		return (uint64_t)max_records;
+	if (inflated > (long double)std::numeric_limits<uint64_t>::max())
+		return std::numeric_limits<uint64_t>::max();
+
+	return (uint64_t)inflated;
+}
 
 static SEXP build_rintervals_extract(GIntervalsFetcher1D *out_intervals1d, GIntervalsFetcher2D *out_intervals2d, const vector< vector<double> > &values,
 									 vector<unsigned> *interv_ids, SEXP _exprs, SEXP _colnames, IntervUtils &iu)
@@ -322,9 +400,9 @@ SEXP C_gextract(SEXP _intervals, SEXP _exprs, SEXP _colnames, SEXP _iterator_pol
 		return answer;
 	} catch (TGLException &e) {
 		rerror("%s", e.msg());
-    } catch (const bad_alloc &e) {
-        rerror("Out of memory");
-    }
+	} catch (const bad_alloc &e) {
+		rerror("Out of memory");
+	}
 	return R_NilValue;
 }
 
@@ -450,19 +528,14 @@ SEXP gextract_multitask(SEXP _intervals, SEXP _exprs, SEXP _colnames, SEXP _iter
 			return R_NilValue;
 		}
 
-		bool is_1d_iterator = iu.is_1d_iterator(_exprs, intervals1d, intervals2d, _iterator_policy);
-
-		// Estimate result size and select appropriate multitasking mode
-		uint64_t estimated_records = is_1d_iterator ? intervals1d->size() : intervals2d->size();
-		rdb::MultitaskingMode mode = iu.select_multitasking_mode(true, estimated_records);
-
-		// If mode is SINGLE (size too large), fall back to non-multitasking version
-		if (mode == rdb::MT_MODE_SINGLE) {
-			return C_gextract(_intervals, _exprs, _colnames, _iterator_policy, _band, R_NilValue, _intervals_set_out, _envir);
-		}
-
 		if (!iu.prepare4multitasking(_exprs, intervals1d, intervals2d, _iterator_policy, _band))
 			rreturn(R_NilValue);
+
+		bool is_1d_iterator = iu.is_1d_iterator(_exprs, intervals1d, intervals2d, _iterator_policy);
+		// Estimate number of records to cap shared-memory allocation size
+		uint64_t base_estimated_records = estimate_records_for_expr(iu, _exprs, intervals1d, intervals2d, _iterator_policy, _band);
+		double max_records_factor = iu.get_multitask_max_records_factor();
+		uint64_t estimated_records = inflate_estimated_records(iu, base_estimated_records, max_records_factor);
 
 		if (!intervset_out.empty()) {
 			vector<GIntervalsBigSet1D::ChromStat> chromstats1d;
@@ -574,10 +647,38 @@ SEXP gextract_multitask(SEXP _intervals, SEXP _exprs, SEXP _colnames, SEXP _iter
 			rreturn(R_NilValue);
 		}
 
-		if (iu.distribute_task(0,
-							   (is_1d_iterator ? sizeof(GInterval) : sizeof(GInterval2D)) + // interval
-							   sizeof(unsigned) +                                                // interval id
-							   sizeof(double) * num_exprs))                                      // values
+		bool do_child = false;
+		for (;;) {
+			try {
+				if (estimated_records > 0) {
+					do_child = iu.distribute_task(0,
+												  (is_1d_iterator ? sizeof(GInterval) : sizeof(GInterval2D)) + // interval
+												  sizeof(unsigned) +                                                // interval id
+												  sizeof(double) * num_exprs,                                      // values
+												  rdb::MT_MODE_MMAP,
+												  estimated_records);
+				} else {
+					do_child = iu.distribute_task(0,
+												  (is_1d_iterator ? sizeof(GInterval) : sizeof(GInterval2D)) + // interval
+												  sizeof(unsigned) +                                                // interval id
+												  sizeof(double) * num_exprs);                                     // values
+				}
+				break;
+			} catch (TGLException &e) {
+				string msg(e.msg());
+				if (msg.find("Failed to allocate shared memory") != string::npos) {
+					if (base_estimated_records > 0 && max_records_factor > 1.0) {
+						max_records_factor = max(1.0, max_records_factor / 2.0);
+						estimated_records = inflate_estimated_records(iu, base_estimated_records, max_records_factor);
+						continue;
+					}
+					return C_gextract(_intervals, _exprs, _colnames, _iterator_policy, _band, R_NilValue, _intervals_set_out, _envir);
+				}
+				throw;
+			}
+		}
+
+		if (do_child)
 		{  // child process
 			GIntervalsFetcher1D *kid_intervals1d = iu.get_kid_intervals1d();
 			GIntervalsFetcher2D *kid_intervals2d = iu.get_kid_intervals2d();
@@ -725,10 +826,14 @@ SEXP gextract_multitask(SEXP _intervals, SEXP _exprs, SEXP _colnames, SEXP _iter
             rreturn(answer);
 		}
 	} catch (TGLException &e) {
+		string msg(e.msg());
+		if (msg.find("Result size exceeded the maximal allowed") != string::npos) {
+			return C_gextract(_intervals, _exprs, _colnames, _iterator_policy, _band, _file, _intervals_set_out, _envir);
+		}
 		rerror("%s", e.msg());
-    } catch (const bad_alloc &e) {
-        rerror("Out of memory");
-    }
+	} catch (const bad_alloc &e) {
+		rerror("Out of memory");
+	}
 	rreturn(R_NilValue);
 }
 

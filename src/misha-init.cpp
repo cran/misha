@@ -40,7 +40,7 @@ extern "C" {
     extern SEXP gintervs_liftover(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gintervsort(SEXP, SEXP);
     extern SEXP gintervunion(SEXP, SEXP, SEXP);
-    extern SEXP giterator_intervals(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+    extern SEXP giterator_intervals(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gmapply(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gmapply_multitask(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP C_gpartition(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
@@ -69,6 +69,12 @@ extern "C" {
     extern SEXP gtrack_create_empty_indexed(SEXP, SEXP);
     extern SEXP ginterv_convert(SEXP, SEXP, SEXP);
     extern SEXP ginterv2d_convert(SEXP, SEXP, SEXP);
+    extern SEXP gtrackcor(SEXP, SEXP, SEXP, SEXP, SEXP);
+    extern SEXP gtrackcor_multitask(SEXP, SEXP, SEXP, SEXP, SEXP);
+    extern SEXP gtrackcor_spearman(SEXP, SEXP, SEXP, SEXP, SEXP);
+    extern SEXP gtrackcor_spearman_multitask(SEXP, SEXP, SEXP, SEXP, SEXP);
+    extern SEXP gtrackcor_spearman_exact(SEXP, SEXP, SEXP, SEXP, SEXP);
+    extern SEXP gtrackcor_spearman_exact_multitask(SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gtrackdist(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gtrackdist_multitask(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP gtrack_import_contacts(SEXP, SEXP, SEXP, SEXP, SEXP);
@@ -88,6 +94,10 @@ extern "C" {
     extern SEXP C_gseq_pwm(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP C_gseq_pwm_multitask(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
     extern SEXP C_gseq_kmer(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+    extern SEXP C_gsynth_train(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+    extern SEXP C_gsynth_sample(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+    extern SEXP C_gsynth_replace_kmer(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+    extern SEXP C_gseq_kmer_dist(SEXP, SEXP, SEXP, SEXP);
 }
 
 static const R_CallMethodDef CallEntries[] = {
@@ -124,7 +134,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"gintervs_liftover", (DL_FUNC)&gintervs_liftover, 12},
     {"gintervsort", (DL_FUNC)&gintervsort, 2},
     {"gintervunion", (DL_FUNC)&gintervunion, 3},
-    {"giterator_intervals", (DL_FUNC)&giterator_intervals, 6},
+    {"giterator_intervals", (DL_FUNC)&giterator_intervals, 8},
     {"gmapply", (DL_FUNC)&gmapply, 9},
     {"gmapply_multitask", (DL_FUNC)&gmapply_multitask, 9},
     {"C_gpartition", (DL_FUNC)&C_gpartition, 8},
@@ -153,6 +163,12 @@ static const R_CallMethodDef CallEntries[] = {
     {"gtrack_create_empty_indexed", (DL_FUNC)&gtrack_create_empty_indexed, 2},
     {"ginterv_convert", (DL_FUNC)&ginterv_convert, 3},
     {"ginterv2d_convert", (DL_FUNC)&ginterv2d_convert, 3},
+    {"gtrackcor", (DL_FUNC)&gtrackcor, 5},
+    {"gtrackcor_multitask", (DL_FUNC)&gtrackcor_multitask, 5},
+    {"gtrackcor_spearman", (DL_FUNC)&gtrackcor_spearman, 5},
+    {"gtrackcor_spearman_multitask", (DL_FUNC)&gtrackcor_spearman_multitask, 5},
+    {"gtrackcor_spearman_exact", (DL_FUNC)&gtrackcor_spearman_exact, 5},
+    {"gtrackcor_spearman_exact_multitask", (DL_FUNC)&gtrackcor_spearman_exact_multitask, 5},
     {"gtrackdist", (DL_FUNC)&gtrackdist, 7},
     {"gtrackdist_multitask", (DL_FUNC)&gtrackdist_multitask, 7},
     {"gtrack_import_contacts", (DL_FUNC)&gtrack_import_contacts, 5},
@@ -172,6 +188,10 @@ static const R_CallMethodDef CallEntries[] = {
     {"C_gseq_pwm", (DL_FUNC)&C_gseq_pwm, 16},
     {"C_gseq_pwm_multitask", (DL_FUNC)&C_gseq_pwm_multitask, 17},
     {"C_gseq_kmer", (DL_FUNC)&C_gseq_kmer, 9},
+    {"C_gsynth_train", (DL_FUNC)&C_gsynth_train, 11},
+    {"C_gsynth_sample", (DL_FUNC)&C_gsynth_sample, 11},
+    {"C_gsynth_replace_kmer", (DL_FUNC)&C_gsynth_replace_kmer, 6},
+    {"C_gseq_kmer_dist", (DL_FUNC)&C_gseq_kmer_dist, 4},
     {NULL, NULL, 0}
 };
 

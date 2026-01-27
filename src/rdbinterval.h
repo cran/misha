@@ -331,6 +331,9 @@ public:
 	// Returns the size of the buffer used to store highest/lowest values for high-precision computation of quantiles
 	uint64_t get_quantile_edge_data_size() const { return m_config.get_quantile_edge_data_size(); }
 
+	// Returns multiplier for inflating multitask max_records estimates
+	double get_multitask_max_records_factor() const { return m_config.get_multitask_max_records_factor(); }
+
 	// Selects the appropriate multitasking mode based on estimated result size
 	// is_deterministic: true if result size can be known precisely before running
 	// estimated_size: estimated number of result records (intervals, values, etc.)
@@ -343,6 +346,10 @@ public:
 
 	// Returns the chunk size of 2D track
 	uint64_t get_track_num_chunks() const { return m_config.get_track_num_chunks(); }
+
+	// Estimates total number of iterator bins for simple numeric iterators.
+	// Returns 0 if the iterator type is not supported for fast estimation.
+	uint64_t estimate_num_bins(SEXP iterator_policy, GIntervalsFetcher1D *scope1d, GIntervalsFetcher2D *scope2d) const;
 
 	// Returns true if iterator is 1D
 	bool is_1d_iterator(SEXP rtrack_expr, GIntervalsFetcher1D *scope1d, GIntervalsFetcher2D *scope2d, SEXP riterator);
@@ -381,6 +388,11 @@ public:
 	bool distribute_task(uint64_t res_const_size,    // data size in bytes for all the result
 						 uint64_t res_record_size,   // size in bytes per datum in the result
 						 rdb::MultitaskingMode mode);
+	// Overload with explicit mode and max record count (caps shared memory allocation).
+	bool distribute_task(uint64_t res_const_size,    // data size in bytes for all the result
+						 uint64_t res_record_size,   // size in bytes per datum in the result
+						 rdb::MultitaskingMode mode,
+						 uint64_t max_records);      // max number of result records (0 = use gmax.data.size)
 
 private:
 	GenomeChromKey                m_chrom_key;

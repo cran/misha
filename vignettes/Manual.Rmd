@@ -38,6 +38,242 @@ A valid Genomic Database should contain the following files and subdirectories:
 
 `pssms` and `seq` directories are optional and are required only by a subset of functions in the package.
 
+### Dataset API
+
+The `misha` package supports working with multiple data sources through the Dataset API. This is useful when you want to combine a shared read-only reference database with a user-specific database for custom tracks, or when working with multiple data sources that share the same genome.
+
+#### Working Database vs Datasets
+
+The Dataset API distinguishes between:
+
+1. **Working Database**: Set via `gsetroot()`, this is your primary, writable database where new tracks and intervals are created.
+2. **Loaded Datasets**: Added via `gdataset.load()`, these are read-only data sources that provide additional tracks and intervals.
+
+```{r, eval=FALSE}
+# Set your working database
+gsetroot("/data/my_project")
+
+# Load additional datasets
+gdataset.load("/shared/ucsc_annotations")
+gdataset.load("/shared/encode_chipseq")
+
+# List all sources (working db + loaded datasets)
+gdataset.ls()
+
+# Get detailed information
+gdataset.ls(dataframe = TRUE)
+```
+
+**Key Points:**
+- All sources must have identical `chrom_sizes.txt` files (same genome assembly)
+- The working database is used for `seq/` and `chrom_sizes.txt` access
+- Tracks and intervals are aggregated from all sources
+- New tracks are created in the working database only
+
+#### Track Resolution and Collision Handling
+
+By default, loading a dataset with tracks that already exist will error:
+
+```{r, eval=FALSE}
+# If working_db has "my_track" and dataset1 also has "my_track":
+gdataset.load("dataset1")
+# Error: Cannot load dataset 'dataset1': tracks 'my_track' already exist in working database.
+# Use force=TRUE to override (working db wins).
+```
+
+Use `force=TRUE` to allow collisions, with clear precedence rules:
+
+```{r, eval=FALSE}
+# Working database always wins over datasets
+gdataset.load("dataset1", force = TRUE)
+
+# For dataset-to-dataset collisions, later-loaded wins
+gdataset.load("dataset2", force = TRUE)
+
+# Check which source provides a track
+gtrack.dataset("my_track")
+
+# See all sources where a track exists (for debugging)
+gtrack.dbs("my_track")
+```
+
+#### Cross-Database Track Expressions
+
+Track expressions seamlessly combine tracks from different sources:
+
+```{r, eval=FALSE}
+gsetroot("/data/my_project")
+gdataset.load("/shared/annotations")
+
+# Extract tracks from different sources in a single call
+result <- gextract(c("my_track", "annotation_track"), gintervals(1, 0, 10000), iterator = 100)
+
+# Use track expressions across sources
+normalized <- gextract("my_track - annotation_track", gintervals(1, 0, 10000), iterator = 100)
+
+# Access track attributes from any source
+gtrack.attr.get("my_track", "description")
+gtrack.attr.get("annotation_track", "description")
+```
+
+Virtual tracks can reference source tracks from any loaded source:
+
+```{r, eval=FALSE}
+# Create virtual tracks from different sources
+gvtrack.create("vt_signal", "my_track", "avg")
+gvtrack.create("vt_annotation", "annotation_track", "avg")
+
+# Combine them in expressions
+gextract("vt_signal / vt_annotation", gintervals(1, 0, 10000))
+```
+
+#### Querying Track and Interval Sources
+
+Use `gtrack.dataset()`, `gtrack.dbs()`, and `gintervals.dataset()` to find which source contains a track or interval set:
+
+```{r, eval=FALSE}
+# Single track - returns source path
+gtrack.dataset("my_track")
+
+# All sources containing a track (useful for debugging shadowed tracks)
+gtrack.dbs("my_track")
+
+# Multiple tracks (vectorized)
+gtrack.dataset(c("track1", "track2", "track3"))
+
+# Intervals
+gintervals.dataset("my_intervals")
+gintervals.dbs("my_intervals")
+```
+
+Filter track and interval listings by source:
+
+```{r, eval=FALSE}
+# List tracks from a specific source only
+gtrack.ls(db = "/shared/annotations")
+
+# List intervals from working database
+gintervals.ls(db = "/data/my_project")
+```
+
+#### Creating and Sharing Datasets
+
+Use `gdataset.save()` to create a dataset from selected tracks and intervals:
+
+```{r, eval=FALSE}
+gsetroot("/data/my_project")
+
+# Create a dataset with selected tracks and intervals
+gdataset.save(
+    path = "/shared/my_chipseq_dataset",
+    description = "ChIP-seq tracks for H3K4me3 and H3K27ac",
+    tracks = gtrack.ls("chip_"), # Pattern matching
+    intervals = c("peaks_h3k4me3", "peaks_h3k27ac")
+)
+
+# Options:
+# - symlinks = TRUE: Create symlinks instead of copying (saves space)
+# - copy_seq = TRUE: Copy seq/ directory instead of symlinking
+```
+
+Get information about a dataset:
+
+```{r, eval=FALSE}
+gdataset.info("/shared/my_chipseq_dataset")
+# Returns: description, author, created date, track/interval counts, genome hash
+```
+
+#### Creating a Linked Database
+
+Use `gdb.create_linked()` to create a lightweight database that links to a parent database's `seq/` directory and `chrom_sizes.txt` file:
+
+```{r, eval=FALSE}
+# Create linked database with symlinks to parent's seq and chrom_sizes
+gdb.create_linked("~/my_db", parent = "/shared/hg38")
+
+# Use as your working database
+gsetroot("~/my_db")
+
+# Load datasets from the parent
+gdataset.load("/shared/hg38")
+
+# Create your own tracks
+gtrack.create("my_analysis", "Analysis results", "reference_track * 2")
+```
+
+This avoids duplicating large sequence files while allowing you to maintain your own tracks.
+
+#### Unloading Datasets
+
+Remove loaded datasets from the namespace:
+
+```{r, eval=FALSE}
+# Unload a dataset (tracks/intervals become unavailable)
+gdataset.unload("/shared/annotations")
+
+# Safe to call even if not loaded (no error by default)
+gdataset.unload("/nonexistent/path")
+
+# Error if validate=TRUE and not loaded
+gdataset.unload("/nonexistent/path", validate = TRUE)
+# Error: Dataset '/nonexistent/path' is not loaded
+```
+
+When unloading datasets that had track collisions (loaded with `force=TRUE`), shadowed tracks are restored with proper precedence: working database first, then datasets in load order.
+
+#### Moving and Copying Tracks
+
+Use `gtrack.mv()` to rename a track or move it within the same database:
+
+```{r, eval=FALSE}
+# Rename a track
+gtrack.mv("old_name", "new_name")
+
+# Move to a different namespace (directory)
+gtrack.mv("analysis.track1", "results.track1")
+```
+
+Use `gtrack.copy()` to create a copy of a track. The copy is created in the current working directory (GWD), which may be in a different database when multiple databases are connected:
+
+```{r, eval=FALSE}
+# Copy a track within the same database
+gtrack.copy("source_track", "copy_track")
+
+# Copy from a loaded dataset to the working database
+gsetroot("/data/my_project")
+gdataset.load("/shared/annotations")
+gtrack.copy("annotation_track", "my_local_copy") # Copy to working db
+```
+
+Note: `gtrack.mv()` only works within the same database. To move a track between databases, use `gtrack.copy()` followed by `gtrack.rm()`.
+
+#### Virtual Tracks Across Sources
+
+Virtual tracks remain global and are not tied to any specific source. They can reference tracks from any loaded source:
+
+```{r, eval=FALSE}
+gsetroot("/data/my_project")
+gdataset.load("/shared/annotations")
+
+# Create virtual track referencing track from working db
+gvtrack.create("vt1", "my_local_track", "avg")
+
+# Create virtual track referencing track from dataset
+gvtrack.create("vt2", "annotation_track", "max")
+
+# Use both in same expression
+gextract("vt1 + vt2", gintervals(1, 0, 10000))
+```
+
+#### Backward Compatibility
+
+Single-database usage works exactly as before:
+
+```{r, eval=FALSE}
+gsetroot("single_database") # Works unchanged
+gdb.init("single_database") # Equivalent, also works
+```
+
 An example of a Genomic Database file structure:
 
 ```
@@ -277,7 +513,9 @@ The `.misha$ALLGENOME` variable is frequently used as a default value for the in
 
 Interval sets can be saved in the Genomic Database. Use the `gintervals.save` and `gintervals.load` functions to save or load an interval set from the database, and `gintervals.update` to update/add/delete a certain chromosome from the set.
 
-Internally, interval sets can be stored in two different formats: **small interval set** or **big interval set**. The specific format is chosen depending on the size of the interval set. Big format is selected for interval sets that contain more than `gbig.intervals.size` intervals (`gbig.intervals.size` is set via `options`), while smaller sets are stored in the small format. Use `gintervals.is.bigset` to determine the format of the stored interval set.
+Internally, interval sets can be stored in two different formats: **small interval set** or **big interval set**. The specific format is chosen depending on the size of the interval set. Big format is selected for interval sets that contain more than `gbig.intervals.size` intervals (default: 1,000,000; set via `options`), while smaller sets are stored in the small format. Use `gintervals.is.bigset` to determine the format of the stored interval set.
+
+> **Note:** `gbig.intervals.size` controls *storage format* for interval sets (disk-based vs. in-memory), while `gmax.data.size` controls *buffer sizes* for streaming operations like `gextract` and `gquantiles`. These are independent thresholds serving different purposes.
 
 Saved interval sets in the small format can be seamlessly used in all functions and track expressions without the need to explicitly load them.
 
@@ -709,13 +947,8 @@ The package coordinates buffer size with process limits to ensure `gmax.processe
 
 The 10GB cap is empirically determined - larger shared memory allocations can fail even when system limits appear to allow them. This cap is rarely hit on multi-core systems due to the per-process division.
 
-**Automatic Small Dataset Detection:**
-The package automatically detects small datasets and uses single-threaded mode to avoid fork overhead. The threshold scales with your system: `threshold = gmax.processes * 1000 records`. For example:
-- 4-core laptop (2 procs): single-threaded below 2K records
-- 16-core workstation (11 procs): single-threaded below 11K records
-- 128-core server (89 procs): single-threaded below 89K records
-
-This dynamic threshold ensures fork overhead stays below 10% of runtime. For larger datasets, multitasking is automatically enabled when beneficial.
+**Small Workloads:**
+Some functions may choose to run single-threaded for very small workloads to avoid fork overhead. This behavior can be function-specific. To disable multitasking entirely, set `options(gmultitasking = FALSE)`.
 
 **Manual Override:**
 You can still manually set these options if needed:
@@ -746,4 +979,3 @@ It is worth to say a word about memory consumption. Deducting real memory usage 
 ### Other Considerations
 
 In multitasking mode the return value of `gquantiles` may vary depending on the number of CPU cores. For more details please refer the documentation of this function.
-

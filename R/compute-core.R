@@ -251,50 +251,155 @@ gsummary <- function(expr = NULL, intervals = NULL, iterator = NULL, band = NULL
     res
 }
 
-
-#' Calculates Wilcoxon test on sliding windows over track expression
+#' Calculates correlation between track expressions
 #'
-#' Calculates Wilcoxon test on sliding windows over the values of track
-#' expression.
+#' Calculates correlation between track expressions over iterator bins
+#' inside the supplied genomic scope. Expressions are processed in pairs:
+#' (expr1, expr2), (expr3, expr4), etc. Only bins where both expressions are
+#' not NaN are used.
 #'
-#' This function runs a Wilcoxon test (also known as a Mann-Whitney test) over
-#' the values of track expression in the two sliding windows having an
-#' identical center. The sizes of the windows are specified by 'winsize1' and
-#' 'winsize2'. 'gwilcox' returns intervals where the smaller window tested
-#' against a larger window gives a P-value below 'maxpval'. The test can be one
-#' or two tailed.
-#'
-#' 'what2find' argument controls what should be searched: peaks, lows or both.
-#'
-#' If 'intervals.set.out' is not 'NULL' the result is saved as an intervals
-#' set. Use this parameter if the result size exceeds the limits of the
-#' physical memory.
-#'
-#' @param expr track expression
-#' @param winsize1 number of values in the first sliding window
-#' @param winsize2 number of values in the second sliding window
-#' @param maxpval maximal P-value
-#' @param onetailed if 'TRUE', Wilcoxon test is performed one tailed, otherwise
-#' two tailed
-#' @param what2find if '-1', lows are searched. If '1', peaks are searched. If
-#' '0', both peaks and lows are searched
+#' @param expr1 first track expression
+#' @param expr2 second track expression
+#' @param ... additional track expressions, supplied as pairs (expr3, expr4, ...)
 #' @param intervals genomic scope for which the function is applied
-#' @param iterator track expression iterator of "fixed bin" type. If 'NULL'
-#' iterator is determined implicitly based on track expression.
-#' @param intervals.set.out intervals set name where the function result is
-#' optionally outputted
-#' @return If 'intervals.set.out' is 'NULL' a data frame representing the
-#' intervals with an additional 'pval' column where P-value is below 'maxpval'.
-#' @seealso \code{\link{gscreen}}, \code{\link{gsegment}}
-#' @keywords ~wilcoxon ~Mann-Whitney
+#' @param iterator track expression iterator. If 'NULL' iterator is determined
+#' implicitly based on track expression.
+#' @param band track expression band. If 'NULL' no band is used.
+#' @param method correlation method to use. One of 'pearson' (default),
+#' 'spearman' (approximate, memory-efficient), or 'spearman.exact' (exact,
+#' requires O(n) memory where n is number of non-NaN pairs).
+#' @param details if 'TRUE' returns summary statistics for each pair, otherwise
+#' returns correlations only. For Pearson, includes n, n.na, mean1, mean2, sd1,
+#' sd2, cov, cor. For Spearman methods, includes n, n.na, cor.
+#' @param names optional names for the pairs. If supplied, length must match the
+#' number of pairs.
+#' @return If 'details' is 'FALSE', a numeric vector of correlations. If
+#' 'details' is 'TRUE', a data frame with summary statistics for each pair.
+#' @seealso \code{\link{gextract}}, \code{\link{gscreen}}, \code{\link{gsummary}}
 #' @examples
 #' \dontshow{
-#' options(gmax.processes = 2)
+#' old <- options(gmax.processes = 2, gmultitasking = FALSE, gmax.data.size = 1e5)
 #' }
 #'
 #' gdb.init_examples()
-#' gwilcox("dense_track", 100000, 1000,
-#'     maxpval = 0.01,
-#'     what2find = 1
+#' gcor("dense_track", "sparse_track", intervals = gintervals(1, 0, 10000), iterator = 1000)
+#'
+#' # Spearman correlation (approximate, memory-efficient)
+#' gcor("dense_track", "sparse_track",
+#'     intervals = gintervals(1, 0, 10000),
+#'     iterator = 1000, method = "spearman"
 #' )
 #'
+#' # Exact Spearman correlation
+#' gcor("dense_track", "sparse_track",
+#'     intervals = gintervals(1, 0, 10000),
+#'     iterator = 1000, method = "spearman.exact"
+#' )
+#'
+#' \dontshow{
+#' options(old)
+#' }
+#'
+#' @export gcor
+gcor <- function(expr1 = NULL, expr2 = NULL, ..., intervals = NULL, iterator = NULL, band = NULL, method = c("pearson", "spearman", "spearman.exact"), details = FALSE, names = NULL) {
+    if (is.null(substitute(expr1)) || is.null(substitute(expr2))) {
+        stop("Usage: gcor(expr1, expr2, ..., intervals = .misha$ALLGENOME, iterator = NULL, band = NULL, method = 'pearson', details = FALSE, names = NULL)", call. = FALSE)
+    }
+    .gcheckroot()
+
+    intervals <- rescue_ALLGENOME(intervals, as.character(substitute(intervals)))
+
+    eval_env <- parent.frame()
+    args <- c(list(substitute(expr1)), list(substitute(expr2)), as.list(substitute(list(...)))[-1L])
+
+    is_intervals_candidate <- function(x) {
+        if (is.data.frame(x)) {
+            return(.gintervals.is1d(x) || .gintervals.is2d(x))
+        }
+        if (is.character(x) && length(x) == 1) {
+            gintervs <- get("GINTERVS", envir = .misha)
+            if (x %in% gintervs) {
+                return(TRUE)
+            }
+            if (.gintervals.is_bigset(x, FALSE)) {
+                return(TRUE)
+            }
+        }
+        FALSE
+    }
+
+    # Check for positional intervals (last argument) before defaulting to ALLGENOME
+    if (is.null(intervals) && length(args) %% 2 != 0) {
+        intervals_candidate <- eval(args[[length(args)]], eval_env)
+        if (is_intervals_candidate(intervals_candidate)) {
+            intervals <- intervals_candidate
+            args <- args[-length(args)]
+        } else {
+            stop("gcor expects an even number of track expressions (pairs).", call. = FALSE)
+        }
+    }
+
+    if (length(args) %% 2 != 0) {
+        stop("gcor expects an even number of track expressions (pairs).", call. = FALSE)
+    }
+
+    # Default to ALLGENOME after positional intervals check
+    if (is.null(intervals)) {
+        intervals <- get("ALLGENOME", envir = .misha)
+    }
+
+    exprs <- vapply(args, function(arg) {
+        do.call(.gexpr2str, list(arg), envir = eval_env)
+    }, character(1))
+    .iterator <- do.call(.giterator, list(substitute(iterator)), envir = eval_env)
+    num_pairs <- length(exprs) / 2
+
+    if (!is.null(names) && length(names) != num_pairs) {
+        stop("names length must match the number of expression pairs.", call. = FALSE)
+    }
+
+    method <- match.arg(method)
+
+    # Select C++ function based on method
+    if (method == "pearson") {
+        if (.ggetOption("gmultitasking")) {
+            res <- .gcall("gtrackcor_multitask", exprs, intervals, .iterator, band, .misha_env())
+        } else {
+            res <- .gcall("gtrackcor", exprs, intervals, .iterator, band, .misha_env())
+        }
+    } else if (method == "spearman") {
+        if (.ggetOption("gmultitasking")) {
+            res <- .gcall("gtrackcor_spearman_multitask", exprs, intervals, .iterator, band, .misha_env())
+        } else {
+            res <- .gcall("gtrackcor_spearman", exprs, intervals, .iterator, band, .misha_env())
+        }
+    } else if (method == "spearman.exact") {
+        if (.ggetOption("gmultitasking")) {
+            res <- .gcall("gtrackcor_spearman_exact_multitask", exprs, intervals, .iterator, band, .misha_env())
+        } else {
+            res <- .gcall("gtrackcor_spearman_exact", exprs, intervals, .iterator, band, .misha_env())
+        }
+    }
+
+    if (is.null(dim(res))) {
+        stats_matrix <- matrix(res, nrow = 1, dimnames = list(NULL, names(res)))
+    } else {
+        stats_matrix <- res
+    }
+
+    pair_names <- if (is.null(names)) {
+        paste(exprs[seq(1, length(exprs), by = 2)], exprs[seq(2, length(exprs), by = 2)], sep = "~")
+    } else {
+        names
+    }
+
+    if (isTRUE(details)) {
+        stats_df <- as.data.frame(stats_matrix, stringsAsFactors = FALSE)
+        rownames(stats_df) <- pair_names
+        return(stats_df)
+    }
+
+    cor_vals <- stats_matrix[, "cor"]
+    names(cor_vals) <- pair_names
+    cor_vals
+}
